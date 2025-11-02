@@ -1,0 +1,10 @@
+# Python Version
+python>=3.8
+
+# Basic Data Science and Scientific Computing
+numpy
+pandas
+matplotlib
+
+# Other Dependencies
+# Add more specific dependencies as needed for your project
