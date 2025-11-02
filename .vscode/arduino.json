@@ -1,0 +1,8 @@
+{
+    "sketch": "src/arduino/satellite/satellite.ino",
+    "board": "arduino:avr:uno",
+    "configuration": "cpu=atmega328",
+    "port": "/dev/ttyACM0",
+    "programmer": "arduino:avrispmkii",
+    "output": "../build"
+}

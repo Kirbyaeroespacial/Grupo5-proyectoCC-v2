@@ -20,6 +20,7 @@ Git es como un sistema súper avanzado para guardar tus cambios. Aquí está có
 
 ### Para Trabajar en Nuevos Cambios
 1. Siempre antes de empezar:
+
    ```bash
    git pull
    ```
