@@ -13,7 +13,7 @@ proyecto_cc/
 ├── docs/                  # Documentation
 ├── requirements.txt       # Python dependencies
 └── .gitignore            # Git ignore rules
-```
+`
 
 ## Components
 
