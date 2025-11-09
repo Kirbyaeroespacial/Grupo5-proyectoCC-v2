@@ -50,4 +50,4 @@ int ping (int trig, int echo){
   distmm = interv * 100/ 292/ 2;
   return distmm;
 }
-//SE HA REALIZADO UN CAMBIO!!
+//SE HA REALIZADO UN CAMBIO!!!
