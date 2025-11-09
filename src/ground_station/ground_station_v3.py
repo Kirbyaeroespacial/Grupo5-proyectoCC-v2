@@ -46,7 +46,8 @@ def read_serial():
     global plot_active, alarm_flag, alarm_message
     while True:
         linea = usbSerial.readline().decode('utf-8', errors='ignore').strip()
-        if not linea:
+        
+        if not linea:#Si no hay nada espera.
             time.sleep(0.01)
             continue
 

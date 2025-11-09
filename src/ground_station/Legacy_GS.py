@@ -70,15 +70,15 @@ def create_btn(master, text, command):
 
 def iniClick(): 
     global plot_active
-    usbSerial.write(b"i\n")
+    usbSerial.write(b"3:i\n")
     plot_active = True
 def stopClick(): 
     global plot_active
-    usbSerial.write(b"p\n")
+    usbSerial.write(b"3:p\n")
     plot_active = False
 def reanClick(): 
     global plot_active
-    usbSerial.write(b"r\n")
+    usbSerial.write(b"3:r\n")
     plot_active = True
 
 create_btn(btn_frame, "Iniciar transmisión", iniClick).grid(row=0, column=0, padx=10)
