@@ -16,8 +16,8 @@ matplotlib.use("TkAgg")
 plot_active = True
 
 #Setup del serial
-#device = 'COM7'
-#usbSerial = serial.Serial(device, 9600, timeout=1)
+device = 'COM7'
+usbSerial = serial.Serial(device, 9600, timeout=1)
 #NO OLVIDAR DESCOMENTAR AL PROBAR!!!!
 
 #Búfer de datos
@@ -25,8 +25,7 @@ max_points = 100
 temps = deque([0]*max_points, maxlen=max_points)
 hums = deque([0]*max_points, maxlen=max_points)
 latest_data = {"temp": 0, "hum": 0}
-
-
+latest_distance = 0  # Añadido: definición de la variable
 
 #Definimos la función read_serial que se encargara de leer los datos:
 def read_serial():
@@ -48,13 +47,18 @@ def read_serial():
                         elif "5" in linea:
                             messagebox.showerror("Error sensor", f"Error en la lectura de los daros del sensor de distancia!!!")
                 except (ValueError, IndexError):
-                    # Ignora linees invalidas.
+                    # Ignora lineas invalidas.
                     pass
-            elif "e" in linea:
+            elif linea.strip().startswith(("e", "E")) and len(linea.strip()) <= 3:
+                # --- Corregido: solo lanza error si la línea realmente es un mensaje de error corto ---
                 plot_active = False
                 messagebox.showerror("Error en la transmisión de datos")
             else:
-                latest_distance = int(linea)
+                try:
+                    latest_distance = int(linea)  # Descomentado y arreglado
+                    print("correcto")
+                except:
+                    pass
             time.sleep(0.01)
 
 
@@ -106,8 +110,8 @@ def leer_vel ():
     try:
         vel_datos = int (vel_datos_raw)
         if 200 <= vel_datos <= 10000:
-            #NO OLVIDAR DESCIOMENTAR AL PROBAR!!!!!!
-            #usbSerial.write(b"1:",vel_datos, "\n") 
+            #NO OLVIDAR DESCOMENTAR AL PROBAR!!!!!!
+            usbSerial.write(f"1:{vel_datos}\n".encode())  # Corregido envío por serial
             print("1:",vel_datos)
             messagebox.showinfo("Velodidad introducida correcta", f"Se ha enviado la siguiente velocidad de datos: {vel_datos}")
         else:
@@ -165,101 +169,88 @@ create_btn(btn_frame_left, "Reanudar", reanClick).grid(row=0, column=2, padx=10)
 
 
 #Gráfico dentro de interfaz
-fig, ax = plt.subplots(figsize=(7, 4.5))
-ax.set_ylim(0, 100)
-ax.set_title("Temperatura y Humedad")
-line_temp, = ax.plot(range(max_points), temps, label="Temperature")
-line_hum, = ax.plot(range(max_points), hums, label="Humidity")
-ax.legend()
-canvas = FigureCanvasTkAgg(fig, master=left_frame)
-canvas.get_tk_widget().pack(pady=20)
+fig_plot, ax_plot = plt.subplots(figsize=(7, 4.5))  # Renombrado para evitar conflicto
+ax_plot.set_ylim(0, 100)
+ax_plot.set_title("Temperatura y Humedad")
+line_temp, = ax_plot.plot(range(max_points), temps, label="Temperature")
+line_hum, = ax_plot.plot(range(max_points), hums, label="Humidity")
+ax_plot.legend()
+canvas_plot = FigureCanvasTkAgg(fig_plot, master=left_frame)
+canvas_plot.get_tk_widget().pack(pady=20)
 
 #Actualizar gráfica periodicamente
 def update_plot():
-    # Actualizar datos siempre
     temps.append(latest_data["temp"])
     hums.append(latest_data["hum"])
     
-    # Mostrar u ocultar líneas
     line_temp.set_visible(plot_active)
     line_hum.set_visible(plot_active)
     
-    # Actualizar datos de las líneas
     line_temp.set_ydata(temps)
     line_hum.set_ydata(hums)
     line_temp.set_xdata(range(len(temps)))
     line_hum.set_xdata(range(len(hums)))
     
-    ax.relim()
-    ax.autoscale_view()
-    canvas.draw()
+    ax_plot.relim()
+    ax_plot.autoscale_view()
+    canvas_plot.draw()
     
-    # Llamar de nuevo después de 100 ms
     window.after(100, update_plot)
 #Fin parte izquierda del programa
 
 #Inicio parte derecha del programa
-#Creación del espacio para los botones (lado izquierdo)
 btn_frame_right = Frame(right_frame, bg=col_der)
 btn_frame_right.pack(pady=10)
-
-create_btn(btn_frame_right, "OS Auto", iniClick).grid(row=0, column=0, padx=10) #Orientación del Sensor auto
-create_btn(btn_frame_right, "OS Manual", stopClick).grid(row=0, column=1, padx=10) #Orientación del Sensor manual
 
 #Definición de las acciones de los botones en la parte derecha
 def os_man():
     usbSerial.write(b"4:m\n")
+    print("4:m")
 def os_auto():
     usbSerial.write(b"4:a\n")
+    print("4:a")
+
+create_btn(btn_frame_right, "OS Auto", os_auto).grid(row=0, column=0, padx=10)
+create_btn(btn_frame_right, "OS Manual", os_man).grid(row=0, column=1, padx=10)
 
 #Gráfica de radar
-#Setup
 max_distance = 1000
-
 categorias = ["Dist"]
 N = len(categorias)
 angles = np.linspace(0, np.pi, N, endpoint=False).tolist()
 angles += angles[:1]
 
-#Estilo
-fig, ax = plt.subplots(figsize=(7,4.5), subplot_kw=dict(polar=True))
-line, = ax.plot([], [], color='blue', linewidth=2)
-ax.fill([], [], color='blue', alpha=0.25)
-ax.set_xticks(angles[:-1])
-ax.set_xticklabels(categorias)
-ax.set_ylim(0, 100)
+fig_radar, ax_radar = plt.subplots(figsize=(7,4.5), subplot_kw=dict(polar=True))  # Renombrado
+line_radar, = ax_radar.plot([], [], color='blue', linewidth=2)
+ax_radar.fill([], [], color='blue', alpha=0.25)
+ax_radar.set_xticks(angles[:-1])
+ax_radar.set_xticklabels(categorias)
+ax_radar.set_ylim(0, 100)
+ax_radar.set_thetamin(0)
+ax_radar.set_thetamax(180)
+ax_radar.set_theta_zero_location('W')
+ax_radar.set_theta_direction(-1)
+ax_radar.set_title("Radar de Distancia", size=16, color=col_der, y=1.05)
+ax_radar.tick_params(colors="0000")
 
-# --- LÍNEAS NUEVAS PARA SEMICIRCULO ARRIBA ---
-ax.set_thetamin(0)
-ax.set_thetamax(180)
-ax.set_theta_zero_location('W')  # 0° arriba
-ax.set_theta_direction(-1)       # sentido horario
-
-ax.set_title("Radar de Distancia", size=16, color=col_der, y=1.05)
-ax.tick_params(colors="0000")
-#Fin setup
-
-canvas = FigureCanvasTkAgg(fig, master=right_frame)
-canvas.get_tk_widget().pack(expand=True)
+canvas_radar = FigureCanvasTkAgg(fig_radar, master=right_frame)
+canvas_radar.get_tk_widget().pack(expand=True)
 
 def update_radar():
-    valor = min(latest_distance / max_distance * 100, 100)  # normalizar
-    values = [valor] + [valor]  # cerrar
-    line.set_data(angles, values)
+    valor = min(latest_distance / max_distance * 100, 100)
+    values = [valor] + [valor]
+    line_radar.set_data(angles, values)
 
-    # Limpiar relleno anterior y dibujar nuevo
-    for coll in ax.collections:
+    for coll in ax_radar.collections:
         coll.remove()
-    ax.fill(angles, values, color='blue', alpha=0.25)
+    ax_radar.fill(angles, values, color='blue', alpha=0.25)
 
-    canvas.get_tk_widget().after(500, update_radar)  # actualización
+    canvas_radar.get_tk_widget().after(500, update_radar)
 #Fin gráfica de radar
 
-
-
-#Fin parte derecha del programa
-
 window.after(100, update_plot)
+window.after(500, update_radar)
+
 def on_close():
     try:
         usbSerial.close()
@@ -270,4 +261,3 @@ def on_close():
 
 window.protocol("WM_DELETE_WINDOW", on_close)
 window.mainloop()
-window.mainloop()#Ejecuta interfaz
