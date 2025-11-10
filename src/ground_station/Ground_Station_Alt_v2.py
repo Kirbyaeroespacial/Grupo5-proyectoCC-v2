@@ -33,32 +33,57 @@ def read_serial():
         global latest_distance
         while True:
             linea = usbSerial.readline().decode('utf-8').strip()
-            if ":" in linea:
-                ht = linea.split(":")
-                try:
-                    temp = float(ht[1]) / 100
-                    hum = float(ht[0]) / 100
-                    latest_data["temp"] = temp
-                    latest_data["hum"] = hum
-                    print(f"Serial: {temp:.2f} °C, {hum:.2f} %")
-                    if "e" in linea:
-                        if "4" in linea:
-                            messagebox.showerror("Error sensor", f"Error en la lectura de los datos del sensor de temperatura y humedad!!!")
-                        elif "5" in linea:
-                            messagebox.showerror("Error sensor", f"Error en la lectura de los daros del sensor de distancia!!!")
-                except (ValueError, IndexError):
-                    # Ignora lineas invalidas.
-                    pass
-            elif linea.strip().startswith(("e", "E")) and len(linea.strip()) <= 3:
-                # --- Corregido: solo lanza error si la línea realmente es un mensaje de error corto ---
-                plot_active = False
-                messagebox.showerror("Error en la transmisión de datos")
-            else:
-                try:
-                    latest_distance = int(linea)  # Descomentado y arreglado
-                    print("correcto")
-                except:
-                    pass
+            if not linea:
+                time.sleep(0.01)
+                continue
+
+            # Expected message formats from satellite/GS:
+            # 1:hum100:temp100   -> humidity and temperature (values multiplied by 100)
+            # 2:distance         -> distance in mm
+            # 4:e:1 or 5:e:1    -> error messages
+            tokens = linea.split(":")
+            try:
+                # If the line starts with a numeric ID, parse by ID
+                if tokens[0].isdigit():
+                    msg_id = int(tokens[0])
+                    if msg_id == 1 and len(tokens) >= 3:
+                        hum = float(tokens[1]) / 100.0
+                        temp = float(tokens[2]) / 100.0
+                        latest_data["temp"] = temp
+                        latest_data["hum"] = hum
+                        print(f"Serial: {temp:.2f} °C, {hum:.2f} %")
+                    elif msg_id == 2 and len(tokens) >= 2:
+                        try:
+                            latest_distance = int(tokens[1])
+                            print(f"Distance: {latest_distance} mm")
+                        except ValueError:
+                            pass
+                    elif msg_id in (4, 5):
+                        # error messages like "4:e:1" or "5:e:2"
+                        plot_active = False
+                        if msg_id == 4:
+                            messagebox.showerror("Error sensor", "Error en la lectura de los datos del sensor de temperatura y humedad!!!")
+                        else:
+                            messagebox.showerror("Error sensor", "Error en la lectura de los datos del sensor de distancia!!!")
+                    else:
+                        # Unknown ID - ignore or log
+                        pass
+                else:
+                    # Legacy/simple lines: try to parse as distance integer
+                    try:
+                        latest_distance = int(linea)
+                        print("correcto")
+                    except ValueError:
+                        # if contains 'e' short error markers
+                        if linea.strip().lower().startswith(("e",)) and len(linea.strip()) <= 3:
+                            plot_active = False
+                            messagebox.showerror("Error en la transmisión de datos")
+                        else:
+                            # unknown content - ignore
+                            pass
+            except Exception:
+                # Defensive: ignore malformed serial lines
+                pass
             time.sleep(0.01)
 
 
