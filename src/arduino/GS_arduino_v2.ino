@@ -19,14 +19,14 @@ void prot3(String valor) {
   Serial.println(valor);    
 }
 
-void prot4() {              
+void prot4(String valor) {              
   Serial.println("error_sensor_temperatura/humedad");
-  Serial.println(data);
+  Serial.println(valor);
 }
 
-void prot5() {              
+void prot5(String valor) {              
   Serial.println("error_sensor_distancia");
-  Serial.println(data);
+  Serial.println(valor);
 }
 //Fin definición protocolo
 
@@ -63,11 +63,11 @@ void loop() {
         if (id == 1) prot1(valor);
         else if (id == 2) prot2(valor);
         else if (id == 3) prot3(valor);
-        else if (id == 4) prot4();
-        else if (id == 5) prot5();
+        else if (id == 4) prot4(valor);
+        else if (id == 5) prot5(valor);
         
-        // LED error si mensaje = "e"
-        if (valor.equals("e")) {
+        // LED error si payload comienza con "e" (ej: "e:1")
+        if (valor.startsWith("e")) {
           digitalWrite(errpin, HIGH);
           delay(500);
           digitalWrite(errpin, LOW);

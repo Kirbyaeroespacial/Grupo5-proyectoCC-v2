@@ -33,32 +33,72 @@ def read_serial():
         global latest_distance
         while True:
             linea = usbSerial.readline().decode('utf-8').strip()
-            if ":" in linea:
-                ht = linea.split(":")
-                try:
-                    temp = float(ht[1]) / 100
-                    hum = float(ht[0]) / 100
-                    latest_data["temp"] = temp
-                    latest_data["hum"] = hum
-                    print(f"Serial: {temp:.2f} °C, {hum:.2f} %")
-                    if "e" in linea:
-                        if "4" in linea:
-                            messagebox.showerror("Error sensor", f"Error en la lectura de los datos del sensor de temperatura y humedad!!!")
-                        elif "5" in linea:
-                            messagebox.showerror("Error sensor", f"Error en la lectura de los daros del sensor de distancia!!!")
-                except (ValueError, IndexError):
-                    # Ignora lineas invalidas.
-                    pass
-            elif linea.strip().startswith(("e", "E")) and len(linea.strip()) <= 3:
-                # --- Corregido: solo lanza error si la línea realmente es un mensaje de error corto ---
-                plot_active = False
-                messagebox.showerror("Error en la transmisión de datos")
-            else:
-                try:
-                    latest_distance = int(linea)  # Descomentado y arreglado
-                    print("correcto")
-                except:
-                    pass
+            if not linea:
+                time.sleep(0.01)
+                continue
+
+            # Intentamos parsear según el protocolo <ID>:<dato>
+            parts = linea.split(':')
+            try:
+                if len(parts) >= 2 and parts[0] in ('1','2','3','4','5'):
+                    idn = parts[0]
+                    if idn == '1':
+                        # 1:humedad:temperatura  (ej: 1:4000:3000)
+                        if len(parts) >= 3:
+                            try:
+                                hum = int(parts[1]) / 100.0
+                                temp = int(parts[2]) / 100.0
+                                latest_data["temp"] = temp
+                                latest_data["hum"] = hum
+                                print(f"Serial: {temp:.2f} °C, {hum:.2f} %")
+                            except ValueError:
+                                pass
+                        else:
+                            # formato inesperado
+                            pass
+                    elif idn == '2':
+                        # 2:distancia
+                        try:
+                            latest_distance = int(parts[1])
+                            print(f"Distancia recibida: {latest_distance} mm")
+                        except ValueError:
+                            pass
+                    elif idn == '3':
+                        # 3:e  -> error envío datos
+                        plot_active = False
+                        messagebox.showerror("Error transmisión", f"Error en el envío de datos: {':'.join(parts[1:])}")
+                    elif idn == '4':
+                        # 4:e:... -> error sensor temp/hum
+                        messagebox.showerror("Error sensor", f"Error en sensor temp/hum: {':'.join(parts[1:])}")
+                    elif idn == '5':
+                        # 5:e:... -> error sensor distancia
+                        messagebox.showerror("Error sensor", f"Error en sensor distancia: {':'.join(parts[1:])}")
+                    # fin manejo por id
+                else:
+                    # Compatibilidad atrás: si viene "hum:temp" (sin id), seguimos soportando
+                    if ":" in linea:
+                        ht = linea.split(":")
+                        try:
+                            # antiguo: hum:temp
+                            temp = float(ht[1]) / 100
+                            hum = float(ht[0]) / 100
+                            latest_data["temp"] = temp
+                            latest_data["hum"] = hum
+                            print(f"Serial (legacy): {temp:.2f} °C, {hum:.2f} %")
+                        except (ValueError, IndexError):
+                            # Ignora lineas invalidas.
+                            pass
+                    else:
+                        # posible número suelto -> distancia antigua
+                        try:
+                            latest_distance = int(linea)
+                            print("correcto")
+                        except:
+                            # no hacemos nada
+                            pass
+            except Exception as e:
+                # No queremos que un fallo de parseo pare el hilo
+                print("Parse error:", e)
             time.sleep(0.01)
 
 
@@ -111,7 +151,7 @@ def leer_vel ():
         vel_datos = int (vel_datos_raw)
         if 200 <= vel_datos <= 10000:
             #NO OLVIDAR DESCOMENTAR AL PROBAR!!!!!!
-            usbSerial.write(f"1:{vel_datos}\n".encode())  # Corregido envío por serial
+            usbSerial.write(f"1:{vel_datos}\n".encode())  # Enviamos 1:<ms> al Arduino tierra
             print("1:",vel_datos)
             messagebox.showinfo("Velodidad introducida correcta", f"Se ha enviado la siguiente velocidad de datos: {vel_datos}")
         else:
