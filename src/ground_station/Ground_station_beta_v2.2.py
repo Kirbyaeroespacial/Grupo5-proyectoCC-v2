@@ -25,81 +25,101 @@ max_points = 100
 temps = deque([0]*max_points, maxlen=max_points)
 hums = deque([0]*max_points, maxlen=max_points)
 latest_data = {"temp": 0, "hum": 0}
-latest_distance = 0  # Añadido: definición de la variable
+latest_distance = 0  # en mm
+angulo = 90          # inicializamos ángulo por defecto (grados)
+temp_med = 0
+# listas para trail (ángulos en radianes, radios en mm)
+thetas = []
+radios = []
 
 #Definimos la función read_serial que se encargara de leer los datos:
 def read_serial():
-        global plot_active
-        global latest_distance
-        while True:
-            linea = usbSerial.readline().decode('utf-8').strip()
-            if not linea:
-                time.sleep(0.01)
-                continue
+    global plot_active
+    global latest_distance
+    global angulo
+    global temp_med
+    while True:
+        linea = usbSerial.readline().decode('utf-8').strip()
+        if not linea:
+            time.sleep(0.01)
+            continue
 
-            # Intentamos parsear según el protocolo <ID>:<dato>
-            parts = linea.split(':')
-            try:
-                if len(parts) >= 2 and parts[0] in ('1','2','3','4','5'):
-                    idn = parts[0]
-                    if idn == '1':
-                        # 1:humedad:temperatura  (ej: 1:4000:3000)
-                        if len(parts) >= 3:
-                            try:
-                                hum = int(parts[1]) / 100.0
-                                temp = int(parts[2]) / 100.0
-                                latest_data["temp"] = temp
-                                latest_data["hum"] = hum
-                                print(f"Serial: {temp:.2f} °C, {hum:.2f} %")
-                            except ValueError:
-                                pass
-                        else:
-                            # formato inesperado
-                            pass
-                    elif idn == '2':
-                        # 2:distancia
+        # Intentamos parsear según el protocolo <ID>:<dato>
+        parts = linea.split(':')
+        try:
+            if len(parts) >= 2 and parts[0] in ('1','2','3','4','5','6'):
+                idn = parts[0]
+                if idn == '1':
+                    # 1:humedad:temperatura  (ej: 1:4000:3000)
+                    if len(parts) >= 3:
                         try:
-                            latest_distance = int(parts[1])
-                            print(f"Distancia recibida: {latest_distance} mm")
-                        except ValueError:
-                            pass
-                    elif idn == '3':
-                        # 3:e  -> error envío datos
-                        plot_active = False
-                        messagebox.showerror("Error transmisión", f"Error en el envío de datos: {':'.join(parts[1:])}")
-                    elif idn == '4':
-                        # 4:e:... -> error sensor temp/hum
-                        messagebox.showerror("Error sensor", f"Error en sensor temp/hum: {':'.join(parts[1:])}")
-                    elif idn == '5':
-                        # 5:e:... -> error sensor distancia
-                        messagebox.showerror("Error sensor", f"Error en sensor distancia: {':'.join(parts[1:])}")
-                    # fin manejo por id
-                else:
-                    # Compatibilidad atrás: si viene "hum:temp" (sin id), seguimos soportando
-                    if ":" in linea:
-                        ht = linea.split(":")
-                        try:
-                            # antiguo: hum:temp
-                            temp = float(ht[1]) / 100
-                            hum = float(ht[0]) / 100
+                            hum = int(parts[1]) / 100.0
+                            temp = int(parts[2]) / 100.0
                             latest_data["temp"] = temp
                             latest_data["hum"] = hum
-                            print(f"Serial (legacy): {temp:.2f} °C, {hum:.2f} %")
-                        except (ValueError, IndexError):
-                            # Ignora lineas invalidas.
+                            print(f"Serial: {temp:.2f} °C, {hum:.2f} %")
+                        except ValueError:
                             pass
-                    else:
-                        # posible número suelto -> distancia antigua
-                        try:
-                            latest_distance = int(linea)
-                            print("correcto")
-                        except:
-                            # no hacemos nada
-                            pass
-            except Exception as e:
-                # No queremos que un fallo de parseo pare el hilo
-                print("Parse error:", e)
-            time.sleep(0.01)
+                elif idn == '2':
+                    # 2:distancia
+                    try:
+                        latest_distance = int(parts[1])
+                        print(f"Distancia recibida: {latest_distance} mm")
+                    except ValueError:
+                        pass
+                elif idn == '3':
+                    # 3:e  -> error envío datos
+                    plot_active = False
+                    messagebox.showerror("Error transmisión", f"Error en el envío de datos: {':'.join(parts[1:])}")
+                elif idn == '4':
+                    # 4:e:... -> error sensor temp/hum
+                    messagebox.showerror("Error sensor", f"Error en sensor temp/hum: {':'.join(parts[1:])}")
+                elif idn == '5':
+                    # 5:e:... -> error sensor distancia
+                    messagebox.showerror("Error sensor", f"Error en sensor distancia: {':'.join(parts[1:])}")
+                elif idn == '6':
+                    # 6:angulo  (ángulo en grados 0..180)
+                    try:
+                        angulo = int(parts[1])
+                        # clamp por seguridad
+                        if angulo < 0: angulo = 0
+                        if angulo > 180: angulo = 180
+                        # debug
+                        # print(f"Ángulo recibido: {angulo}°")
+                    except ValueError:
+                       
+                        messagebox.showerror("Error ángulo", f"Error al recibir ángulo, valor incorrecto.")
+                elif idn == '7':
+                    temp_med = int(parts[1]) / 100
+                elif idn == '8':
+                    # 8:e:... -> temperatura muy elevada
+                    messagebox.showinfo("Alta temperatura!", f"¡PELIGRO! ¡¡La temperatura media excede los 100ºC!!")
+            else:
+                # Compatibilidad atrás: si viene "hum:temp" (sin id), seguimos soportando
+                if ":" in linea:
+                    ht = linea.split(":")
+                    try:
+                        # antiguo: hum:temp
+                        temp = float(ht[1]) / 100
+                        hum = float(ht[0]) / 100
+                        latest_data["temp"] = temp
+                        latest_data["hum"] = hum
+                        print(f"Serial (legacy): {temp:.2f} °C, {hum:.2f} %")
+                    except (ValueError, IndexError):
+                        # Ignora lineas invalidas.
+                        pass
+                else:
+                    # posible número suelto -> distancia antigua
+                    try:
+                        latest_distance = int(linea)
+                        print(latest_distance)
+                    except:
+                        # no hacemos nada
+                        pass
+        except Exception as e:
+            # No queremos que un fallo de parseo pare el hilo
+            print("Parse error:", e)
+        time.sleep(0.01)
 
 
 threading.Thread(target=read_serial, daemon=True).start()
@@ -186,7 +206,7 @@ def create_btn(master, text, command):
     return Button(
         master, text=text, command=command,
         font=button_font, bg="#4b6cb7", fg="white",
-        activebackground="#6b8dd6", activeforeground="white",
+        activebackground="#4b6dd6", activeforeground="white",
         bd=0, relief=RIDGE, padx=20, pady=15, width=18
     )
 #Definición de las acciones de los botones
@@ -214,20 +234,24 @@ ax_plot.set_ylim(0, 100)
 ax_plot.set_title("Temperatura y Humedad")
 line_temp, = ax_plot.plot(range(max_points), temps, label="Temperature")
 line_hum, = ax_plot.plot(range(max_points), hums, label="Humidity")
+line_med = ax_plot.plot(range(max_points), temp_med, label= "Avg. temp")
 ax_plot.legend()
 canvas_plot = FigureCanvasTkAgg(fig_plot, master=left_frame)
 canvas_plot.get_tk_widget().pack(pady=20)
 
 #Actualizar gráfica periodicamente
 def update_plot():
+    global temp_med
     temps.append(latest_data["temp"])
     hums.append(latest_data["hum"])
+    temp_med.append(latest_data["avgt"])
     
     line_temp.set_visible(plot_active)
     line_hum.set_visible(plot_active)
     
     line_temp.set_ydata(temps)
     line_hum.set_ydata(hums)
+    line_med.set_ydata(temp_med)
     line_temp.set_xdata(range(len(temps)))
     line_hum.set_xdata(range(len(hums)))
     
@@ -252,57 +276,45 @@ create_btn(btn_frame_right, "OS Auto", os_auto).grid(row=0, column=0, padx=10)
 create_btn(btn_frame_right, "OS Manual", os_man).grid(row=0, column=1, padx=10)
 
 #Gráfica de radar
-max_distance = 1000
-categorias = ["Dist"]
-N = len(categorias)
+fig, ax_rad = plt.subplots(subplot_kw={'polar': True}, figsize=(7,4.5))
+max_distance = 1945  # RANGE actualizado a 1945 mm
+ax_rad.set_ylim(0, max_distance)
+ax_rad.set_thetamin(0)
+ax_rad.set_thetamax(180)
+ax_rad.set_theta_zero_location('W')
+ax_rad.set_theta_direction(-1)
 
-# Ángulos: semicirculo superior (0..180º) -> en radianes para matplotlib
-angles = np.linspace(0, np.pi, N, endpoint=False).tolist()
-angles += angles[:1]  # cerrar
+# línea para el trail (inicialmente vacía)
+linea_radar, = ax_rad.plot([], [], 'bo-', linewidth=2, alpha=0.6)
 
-# Inicializamos la figura y el eje polar
-fig_radar, ax_radar = plt.subplots(figsize=(7,4.5), subplot_kw=dict(polar=True))
-# Inicializamos con valores válidos (misma longitud que angles)
-initial_values = [0.0] * len(angles)
-line_radar, = ax_radar.plot(angles, initial_values, linewidth=2)
-fill_radar = ax_radar.fill(angles, initial_values, alpha=0.25)
-
-ax_radar.set_xticks(angles[:-1])
-ax_radar.set_xticklabels(categorias)
-ax_radar.set_ylim(0, 100)
-ax_radar.set_thetamin(0)
-ax_radar.set_thetamax(180)
-ax_radar.set_theta_zero_location('W')
-ax_radar.set_theta_direction(-1)
-ax_radar.set_title("Radar de Distancia", size=16, color=col_der, y=1.05)
-ax_radar.tick_params(colors="0000")
-
-canvas_radar = FigureCanvasTkAgg(fig_radar, master=right_frame)
+canvas_radar = FigureCanvasTkAgg(fig, master=right_frame)
 canvas_radar.get_tk_widget().pack(expand=True)
 
 def update_radar():
-    global latest_distance
-    # Normalizar (0..100)
-    try:
-        valor = min(max(latest_distance / max_distance * 100.0, 0.0), 100.0)
-    except Exception:
-        valor = 0.0
+    global latest_distance, angulo, thetas, radios
 
-    # valores debe tener la misma longitud que angles
-    values = [valor] * (len(angles))
-    # Actualizar línea y relleno
-    line_radar.set_data(angles, values)
+    # convertir ángulo a radianes
+    theta_now = np.deg2rad(angulo)
+    r_now = min(max(latest_distance, 0), max_distance)  # en mm
 
-    # limpiar rellenos anteriores
-    for coll in list(ax_radar.collections):
-        coll.remove()
-    ax_radar.fill(angles, values, alpha=0.25)
+    # añadir al trail
+    thetas.append(theta_now)
+    radios.append(r_now)
 
-    # Forzar redraw del canvas
+    # limitar longitud del trail
+    if len(thetas) > 20:
+        thetas.pop(0)
+        radios.pop(0)
+
+    # actualizar datos de la línea
+    linea_radar.set_data(thetas, radios)
+
+    # redibujar
     canvas_radar.draw()
 
-    # Llamar de nuevo después de 500 ms (modo automático)
-    window.after(500, update_radar)
+    # volver a llamar
+    window.after(100, update_radar)
+
 #Fin gráfica de radar
 
 window.after(100, update_plot)
