@@ -12,7 +12,7 @@ import matplotlib.animation as animation
 from matplotlib import style
 
 class GroundStation:
-    def __init__(self, port='COM3', baudrate=9600):
+    def __init__(self, port='COM7', baudrate=9600):
         self.port = port
         self.baudrate = baudrate
         self.serial = None
