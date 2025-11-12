@@ -143,8 +143,7 @@ void loop() {
             updateTempMedia(t);
             sendPacket(7, String((int)(tempMedia * 100)));
             }
-            // --------------------------------------------------------------------
-
+    
         } else {
             satSerial.println("g"); // heartbeat
         }
