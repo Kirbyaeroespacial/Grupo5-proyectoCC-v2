@@ -1,0 +1,174 @@
+#include <SoftwareSerial.h>
+SoftwareSerial mySerial(10, 11); // RX, TX
+
+int errpin = 2;
+const int potent = A0;
+unsigned long lastReceived = 0;
+unsigned long last = 0;
+const unsigned long timeout = 5000;
+const unsigned long delay_ang = 200;
+String data;
+
+// --- checksum: suma de bytes % 256 (mínimo cambio) ---
+uint8_t checksum_of_string(const String &s) {
+  unsigned int suma = 0;
+  for (size_t i = 0; i < s.length(); ++i) {
+    suma += (uint8_t)s[i]; // forzar unsigned
+  }
+  return (uint8_t)(suma & 0xFF);
+}
+
+// Enviar mensaje con formato: <payload>|<CHK>\n al SAT (mySerial)
+void sendWithChecksumToSat(const String &msg) {
+  uint8_t chk = checksum_of_string(msg);
+  mySerial.print(msg);
+  mySerial.print("|");
+  mySerial.println(chk); // println añade final de línea
+}
+
+//Inicio definición protocolo (sin cambios funcionales)
+void prot1(String valor) {  
+  Serial.println("1:" + valor);  // <-- mantiene formato correcto para Python
+}
+
+void prot2(String valor) {  
+  Serial.println("2:" + valor);  // <-- igual para distancia
+}
+
+void prot3(String valor) {  
+  Serial.println("3:" + valor);
+}
+
+void prot4(String valor) {              
+  Serial.println("4:" + valor);
+}
+
+void prot5(String valor) {              
+  Serial.println("5:" + valor);
+}
+
+void prot6(String valor) {              
+  Serial.println("6:" + valor);
+}
+void prot7(String valor) {              
+  Serial.println("7:" + valor);
+}
+
+void prot8(String valor) {              
+  Serial.println("8:e");
+}
+//Fin definición protocolo
+
+void setup() {
+  Serial.begin(9600);
+  mySerial.begin(9600);
+  Serial.println("COMM LISTO");
+  pinMode(errpin, OUTPUT);
+}
+
+void loop() {
+  // Comunicación de GS a SAT
+  if (Serial.available()) {
+    String command = Serial.readStringUntil('\n');
+    command.trim();
+    if (command.length() > 0) {
+      // Enviar al SAT con checksum (cambio mínimo respecto al original)
+      sendWithChecksumToSat(command);
+    }
+  }
+  if (millis() - last > delay_ang){
+    int potval = analogRead(potent);
+    int angle = map(potval, 0, 1023, 180, 0);
+    // Enviar lectura periódica con checksum
+    sendWithChecksumToSat("5:" + String(angle));
+    last = millis();
+  }
+  
+  // Recepción de SAT a GS (ahora esperamos formato payload|CHK)
+  if (mySerial.available()) {
+    String data = mySerial.readStringUntil('\n');
+    data.trim();
+
+    if (data.length() > 0) {
+      // Separa checksum del payload: usar lastIndexOf para permitir '|' en payload si hubiera
+      int sep_chk = data.lastIndexOf('|');
+      if (sep_chk < 0) {
+        // Mensaje sin checksum -> ignorar (según enunciado)
+        Serial.println("RECV SIN_CHECKSUM -> IGNORADO");
+        // opcional: marcar error físico
+        digitalWrite(errpin, HIGH);
+        delay(100);
+        digitalWrite(errpin, LOW);
+        lastReceived = millis();
+        continue;
+      }
+
+      String payload = data.substring(0, sep_chk);
+      String chk_str = data.substring(sep_chk + 1);
+      chk_str.trim();
+
+      // Comprobar que chk_str es numérico (toInt() devuelve 0 si no lo es; 0 puede ser válido)
+      bool chk_valid = true;
+      if (chk_str.length() == 0) chk_valid = false;
+      for (size_t i = 0; i < chk_str.length() && chk_valid; ++i) {
+        if (!isDigit(chk_str.charAt(i))) chk_valid = false;
+      }
+      if (!chk_valid) {
+        Serial.println("RECV CHK_NO_NUM -> IGNORADO");
+        digitalWrite(errpin, HIGH);
+        delay(100);
+        digitalWrite(errpin, LOW);
+        lastReceived = millis();
+        continue;
+      }
+
+      int chk_rec = chk_str.toInt();
+      uint8_t chk_calc = checksum_of_string(payload);
+
+      if ((uint8_t)chk_rec != chk_calc) {
+        // Checksum no coincide => mensaje corrupto -> ignorar y señalar error
+        Serial.print("RECV CORRUPTO: ");
+        Serial.println(data);
+        digitalWrite(errpin, HIGH);
+        delay(250);
+        digitalWrite(errpin, LOW);
+        lastReceived = millis();
+        continue;
+      }
+
+      // Si checksum OK, procesar payload como antes: "id:valor"
+      int sepr = payload.indexOf(':');
+      if (sepr > 0) {
+        int id = payload.substring(0, sepr).toInt();
+        String valor = payload.substring(sepr + 1);
+
+        if (id == 1) prot1(valor);
+        else if (id == 2) prot2(valor);
+        else if (id == 3) prot3(valor);
+        else if (id == 4) prot4(valor);
+        else if (id == 5) prot5(valor);
+        else if (id == 6) prot6(valor);
+        else if (id == 7) prot7(valor);
+        else if (id == 8) prot8(valor);
+
+        if (valor.startsWith("e")) {
+          digitalWrite(errpin, HIGH);
+          delay(500);
+          digitalWrite(errpin, LOW);
+        }
+      } else {
+        Serial.println("RECV FORMATO_INVALIDO -> IGNORADO");
+      }
+
+      lastReceived = millis();
+    }
+  }
+
+  if (millis() - lastReceived > timeout) {
+    Serial.println("timeout");
+    digitalWrite(errpin, HIGH);
+    delay(100);
+    digitalWrite(errpin, LOW);
+    delay(50);
+  }
+}
