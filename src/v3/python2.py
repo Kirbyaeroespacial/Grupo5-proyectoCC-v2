@@ -14,8 +14,8 @@ matplotlib.use("TkAgg")
 
 plot_active = True
 
-# Setup del serial
-device = 'COM7'  # CAMBIAR según tu puerto
+# Setup del serial - CAMBIAR COM7 según tu puerto
+device = 'COM7'
 usbSerial = serial.Serial(device, 9600, timeout=1)
 
 # Búfer de datos sensores
@@ -35,7 +35,7 @@ radios = []
 # Estadísticas checksum
 total_corrupted = 0
 
-# === DATOS ORBITALES ===
+# Datos orbitales
 orbit_x = []
 orbit_y = []
 orbit_lock = threading.Lock()
@@ -43,7 +43,7 @@ orbit_lock = threading.Lock()
 # Regex para parsear posición orbital
 regex_orbit = re.compile(r"Position: \(X: ([\d\.-]+) m, Y: ([\d\.-]+) m, Z: ([\d\.-]+) m\)")
 
-# === FUNCIÓN CHECKSUM (AÑADIDA) ===
+# === FUNCIÓN CHECKSUM ===
 def calc_checksum(msg):
     """Calcula checksum XOR de un mensaje"""
     xor_sum = 0
@@ -79,6 +79,10 @@ def read_serial():
                 with orbit_lock:
                     orbit_x.append(x)
                     orbit_y.append(y)
+                    # Limitar a últimos 1000 puntos
+                    if len(orbit_x) > 1000:
+                        orbit_x.pop(0)
+                        orbit_y.pop(0)
                 print(f"Orbital: X={x}, Y={y}")
             except ValueError:
                 pass
@@ -151,7 +155,7 @@ def read_serial():
 
 threading.Thread(target=read_serial, daemon=True).start()
 
-# === VENTANA ORBITAL (clase separada) ===
+# === VENTANA ORBITAL ===
 class VentanaOrbital:
     def __init__(self, parent):
         self.window = Toplevel(parent)
@@ -241,7 +245,7 @@ Button(title_frame, text="🛰️ Ver Órbita", font=("Inter", 12, "bold"), comm
 # Entrada velocidad
 entry = Entry(window, font=("Inter", 14), fg="#1e1e2f")
 entry.pack(pady=20, ipadx=80, ipady=5)
-placeholder = "Tiempo entre datos o evento"
+placeholder = "Tiempo entre datos (ms)"
 entry.insert(0, placeholder)
 
 def on_entry_click(event):
@@ -257,15 +261,14 @@ def on_focus_out(event):
 entry.bind("<FocusIn>", on_entry_click)
 entry.bind("<FocusOut>", on_focus_out)
 
-# CORREGIDO: función leer_vel con checksum
 def leer_vel():
     vel_datos_raw = entry.get()
     if vel_datos_raw == placeholder or vel_datos_raw == "":
-        messagebox.showerror("Error", "Introduzca valor entre 200-10000 ms")
+        messagebox.showerror("Error", "Introduzca valor entre 3000-10000 ms")
         return
     try:
         vel_datos = int(vel_datos_raw)
-        if 200 <= vel_datos <= 10000:
+        if 3000 <= vel_datos <= 10000:  # CORREGIDO: mínimo 3000ms
             send_command(f"1:{vel_datos}")
             messagebox.showinfo("OK", f"Velocidad: {vel_datos} ms")
         else:
@@ -293,7 +296,6 @@ def create_btn(master, text, command):
     return Button(master, text=text, command=command, font=button_font,
                   bg="#4b6cb7", fg="white", bd=0, padx=20, pady=15, width=18)
 
-# CORREGIDO: funciones con checksum
 def iniClick():
     global plot_active
     send_command("3:i")
@@ -346,7 +348,6 @@ def update_plot():
 btn_frame_right = Frame(right_frame, bg=col_der)
 btn_frame_right.pack(pady=10)
 
-# CORREGIDO: funciones con checksum
 def os_man():
     send_command("4:m")
 
@@ -395,4 +396,3 @@ def on_close():
 
 window.protocol("WM_DELETE_WINDOW", on_close)
 window.mainloop()
-

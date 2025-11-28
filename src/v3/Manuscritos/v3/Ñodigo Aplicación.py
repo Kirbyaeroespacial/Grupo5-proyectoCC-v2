@@ -42,7 +42,7 @@ fuente_btn = font.Font(family="Inter", size=14, weight="bold")
 
 #Inicio inicializació serial
 groundstt = 'COM7'
-#usbSerial = serial.Serial(groundstt, 9600, timeout = 1)
+usbSerial = serial.Serial(groundstt, 9600, timeout = 1)
 #Fin inicialización serial (¡NO OLVIDAR DESCOMENTAR AL ACABAR DEBUG)
 
 

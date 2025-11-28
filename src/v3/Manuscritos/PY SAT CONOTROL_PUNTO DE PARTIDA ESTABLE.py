@@ -50,7 +50,8 @@ usbSerial = serial.Serial(groundstt, 9600, timeout = 1)
 ult_datos = {"temperatura":0, "humedad":0}
 id = '0'
 partes = '0'
-
+tmax = 0
+tmax_raw = 0
 #para el gráfico de temp/hum
 pt_max = 100
 temperaturas = deque([0]*pt_max, maxlen=pt_max)
@@ -135,8 +136,8 @@ def er_ht():
 def posicion_sat():
     print("Work in progress")
 
-def procesar_llegada():
-    global ult_datos, plot_active, ult_dist, angulo, ult_tmed
+def procesar_llegada(partes):
+    global ult_datos, plot_active, ult_dist, angulo, ult_tmed, tmax, tmax_raw
     while True:
         try:
             procesar_recepcion()
@@ -163,7 +164,11 @@ def procesar_llegada():
             er_ht()
         elif id == '9':
             posicion_sat()
+        elif id == '0':
+            tmax_raw = int(partes[1])
+            tmax = tmax_raw/100
         time.sleep(0.01)
+
 threading.Thread(target = procesar_llegada, daemon = True).start()
 #FIN DEFINICIÓN DEL PROTOCOLO DE RECEPCIÓN
 
@@ -305,6 +310,11 @@ placeholder = "Tiempo entre datos (ms)"
 entry.insert(0, placeholder)
 entry.bind("<FocusIn>", entrada_cajatxt)
 entry.bind("<FocusOut>", desenfoque_cajatxt)
+
+crear_btn(frame_top, "C tmax", sue)
+tmax_text = Label(frame_top, text = f"{tmax}", font = fuente_titulo, bg = col_gen, fg = fg)
+Title.pack(pady=10)
+
 
 #UI IZQUIERDA
 crear_btn(frame_top,"Enviar velocidad", leer_vel).pack(padx=10, pady=15)
