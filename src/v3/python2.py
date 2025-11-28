@@ -14,8 +14,8 @@ matplotlib.use("TkAgg")
 
 plot_active = True
 
-# Setup del serial - CAMBIAR COM7 según tu puerto
-device = 'COM7'
+# Setup del serial
+device = 'COM7'  # CAMBIAR según tu puerto
 usbSerial = serial.Serial(device, 9600, timeout=1)
 
 # Búfer de datos sensores
@@ -35,13 +35,10 @@ radios = []
 # Estadísticas checksum
 total_corrupted = 0
 
-# Datos orbitales
+# === DATOS ORBITALES ===
 orbit_x = []
 orbit_y = []
 orbit_lock = threading.Lock()
-
-# Regex para parsear posición orbital
-regex_orbit = re.compile(r"Position: \(X: ([\d\.-]+) m, Y: ([\d\.-]+) m, Z: ([\d\.-]+) m\)")
 
 # === FUNCIÓN CHECKSUM ===
 def calc_checksum(msg):
@@ -70,31 +67,45 @@ def read_serial():
             time.sleep(0.01)
             continue
 
-        # Chequear si es posición orbital
-        match = regex_orbit.search(linea)
-        if match:
-            try:
-                x = float(match.group(1))
-                y = float(match.group(2))
-                with orbit_lock:
-                    orbit_x.append(x)
-                    orbit_y.append(y)
-                    # Limitar a últimos 1000 puntos
-                    if len(orbit_x) > 1000:
-                        orbit_x.pop(0)
-                        orbit_y.pop(0)
-                print(f"Orbital: X={x}, Y={y}")
-            except ValueError:
-                pass
-            time.sleep(0.01)
-            continue
-
         parts = linea.split(':')
         try:
-            if len(parts) >= 2 and parts[0] in ('1','2','3','4','5','6','7','8','67','99'):
+            if len(parts) >= 2 and parts[0] in ('1','2','3','4','5','6','7','8','10','67','99'):
                 idn = parts[0]
                 
-                if idn == '1':
+                # NUEVO PROTOCOLO COMPACTADO
+                if idn == '10':
+                    # Formato: 10:hum:temp:dist:ang:tmed:tiempo:X:Y:Z
+                    if len(parts) >= 10:
+                        try:
+                            hum = int(parts[1]) / 100.0
+                            temp = int(parts[2]) / 100.0
+                            dist = int(parts[3])
+                            ang = int(parts[4])
+                            tmed = int(parts[5]) / 100.0
+                            x = float(parts[7])
+                            y = float(parts[8])
+                            
+                            # Actualizar datos
+                            latest_data["temp"] = temp
+                            latest_data["hum"] = hum
+                            latest_distance = dist
+                            angulo = ang
+                            latest_temp_med = tmed
+                            
+                            # Actualizar órbita
+                            with orbit_lock:
+                                orbit_x.append(x)
+                                orbit_y.append(y)
+                                if len(orbit_x) > 1000:
+                                    orbit_x.pop(0)
+                                    orbit_y.pop(0)
+                            
+                            print(f"Temp:{temp:.1f}°C Hum:{hum:.1f}% Dist:{dist}mm Ang:{ang}° Orbital:({x},{y})")
+                        except (ValueError, IndexError):
+                            pass
+                
+                # PROTOCOLOS INDIVIDUALES (compatibilidad)
+                elif idn == '1':
                     if len(parts) >= 3:
                         try:
                             hum = int(parts[1]) / 100.0
@@ -268,7 +279,7 @@ def leer_vel():
         return
     try:
         vel_datos = int(vel_datos_raw)
-        if 3000 <= vel_datos <= 10000:  # CORREGIDO: mínimo 3000ms
+        if 3000 <= vel_datos <= 10000:
             send_command(f"1:{vel_datos}")
             messagebox.showinfo("OK", f"Velocidad: {vel_datos} ms")
         else:

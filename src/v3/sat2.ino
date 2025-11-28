@@ -1,65 +1,22 @@
-#include <DHT.h> 
 #include <SoftwareSerial.h>
-#include <Servo.h>
+SoftwareSerial mySerial(10, 11); // RX, TX
 
-#define DHTPIN 2
-#define DHTTYPE DHT11
-DHT dht(DHTPIN, DHTTYPE);
+int errpin = 2;
+char potent = A0;
+unsigned long lastReceived = 0;
+unsigned long last = 0;
+const unsigned long timeout = 12000;
+const unsigned long delay_ang = 1500;
 
-SoftwareSerial satSerial(10, 11); // RX=10, TX=11
-const uint8_t LEDPIN = 12;
-bool sending = false;
-unsigned long lastSend = 0;
-unsigned long sendPeriod = 3000UL; // CORREGIDO: de 2000 a 3000
+// Gestión de turnos
+bool satHasToken = false;
+unsigned long lastTokenSent = 0;
+const unsigned long TOKEN_CYCLE = 5500;
 
-const uint8_t servoPin = 5;
-Servo motor;
-
-const uint8_t trigPin = 3;
-const uint8_t echoPin = 4;
-const unsigned long PULSE_TIMEOUT_US = 30000UL;
-
-bool autoDistance = true;
-int servoAngle = 90;
-int servoDir = 1;
-int manualTargetAngle = 90;
-
-const int SERVO_STEP = 2;
-const unsigned long SERVO_MOVE_INTERVAL = 40;
-unsigned long lastServoMove = 0;
-
-bool ledState = false;
-unsigned long ledTimer = 0;
-
-// Sistema de turnos - CORREGIDO: inicia SIN permiso (espera token del GS)
-bool canTransmit = false; // CORREGIDO: de true a false
-unsigned long lastTokenTime = 0;
-const unsigned long TOKEN_TIMEOUT = 8000; // CORREGIDO: de 6000 a 8000
-
-// Delay entre paquetes para LoRa
-const unsigned long INTER_PACKET_DELAY = 75; // AÑADIDO: 75ms entre paquetes
-
-// Checksum
-int corruptedCommands = 0;
-
-// Media móvil temperatura
-#define TEMP_HISTORY 10
-float tempHistory[TEMP_HISTORY];
-int tempIndex = 0;
-bool tempFilled = false;
-float tempMedia = 0.0;
-float medias[3] = {0, 0, 0};
-int mediaIndex = 0;
-
-// === SIMULACIÓN ORBITAL ===
-const double G = 6.67430e-11;
-const double M = 5.97219e24;
-const double R_EARTH = 6371000;
-const double ALTITUDE = 400000;
-const double TIME_COMPRESSION = 90.0;
-double real_orbital_period;
-double r;
-unsigned long orbitStartTime = 0;
+// Checksum: contadores
+int corruptedFromSat = 0;
+unsigned long lastStatsReport = 0;
+const unsigned long STATS_INTERVAL = 10000;
 
 // === CHECKSUM ===
 String calcChecksum(const String &msg) {
@@ -73,263 +30,171 @@ String calcChecksum(const String &msg) {
   return hex;
 }
 
-void sendPacketWithChecksum(uint8_t type, const String &payload) {
-  String msg = String(type) + ":" + payload;
+void sendWithChecksum(const String &msg) {
   String chk = calcChecksum(msg);
   String fullMsg = msg + "*" + chk;
-  satSerial.println(fullMsg);
-  Serial.println("SAT-> " + fullMsg); // CORREGIDO: añadido prefijo
+  mySerial.println(fullMsg);
+  Serial.println("GS-> " + fullMsg);
 }
 
-int pingSensor() {
-    digitalWrite(trigPin, LOW);
-    delayMicroseconds(4);
-    digitalWrite(trigPin, HIGH);
-    delayMicroseconds(10);
-    digitalWrite(trigPin, LOW);
-    unsigned long dur = pulseIn(echoPin, HIGH, PULSE_TIMEOUT_US);
-    if (dur == 0) return 0;
-    return (int)(dur * 0.343 / 2.0);
+bool validateMessage(const String &data, String &cleanMsg) {
+  int asterisco = data.indexOf('*');
+  if (asterisco == -1) return false;
+  
+  cleanMsg = data.substring(0, asterisco);
+  String chkRecv = data.substring(asterisco + 1);
+  String chkCalc = calcChecksum(cleanMsg);
+  
+  return (chkRecv == chkCalc);
 }
 
-void handleCommand(const String &cmd) {
-    Serial.println("CMD: " + cmd); // CORREGIDO: mejor debug
+// Protocolo de aplicación
+void prot1(String valor) { Serial.println("1:" + valor); }
+void prot2(String valor) { Serial.println("2:" + valor); }
+void prot3(String valor) { Serial.println("3:" + valor); }
+void prot4(String valor) { Serial.println("4:" + valor); }
+void prot5(String valor) { Serial.println("5:" + valor); }
+void prot6(String valor) { Serial.println("6:" + valor); }
+void prot7(String valor) { Serial.println("7:" + valor); }
+void prot8(String valor) { Serial.println("8:e"); }
+
+// === PROTOCOLO ORBITAL ===
+void prot9(String valor) {
+  // Recibe: tiempo:X:Y:Z
+  // Envía: Position: (X: ... m, Y: ... m, Z: ... m)
+  int sep1 = valor.indexOf(':');
+  int sep2 = valor.indexOf(':', sep1 + 1);
+  int sep3 = valor.indexOf(':', sep2 + 1);
+  
+  if (sep1 > 0 && sep2 > 0 && sep3 > 0) {
+    String x = valor.substring(sep1 + 1, sep2);
+    String y = valor.substring(sep2 + 1, sep3);
+    String z = valor.substring(sep3 + 1);
     
-    if (cmd == "67:1") {
-        canTransmit = true;
-        lastTokenTime = millis();
-        Serial.println("✓ Token recibido - Puedo transmitir"); // AÑADIDO: debug claro
-        return;
-    } else if (cmd == "67:0") {
-        canTransmit = false;
-        Serial.println("✗ Token perdido"); // AÑADIDO: debug
-        return;
-    }
-    
-    if (cmd.startsWith("1:")) {
-        unsigned long newPeriod = cmd.substring(2).toInt();
-        sendPeriod = max(3000UL, newPeriod); // CORREGIDO: mínimo 3000ms
-        Serial.println("Periodo actualizado: " + String(sendPeriod) + "ms");
-    }
-    else if (cmd.startsWith("2:")) {
-        manualTargetAngle = constrain(cmd.substring(2).toInt(), 0, 180);
-        Serial.println("Angulo manual objetivo: " + String(manualTargetAngle));
-        if (!autoDistance) {
-            motor.write(manualTargetAngle);
-            servoAngle = manualTargetAngle;
-        }
-    }
-    else if (cmd == "3:i" || cmd == "3:r") {
-        sending = true;
-        Serial.println("Transmision iniciada/reanudada");
-    }
-    else if (cmd == "3:p") {
-        sending = false;
-        Serial.println("Transmision pausada");
-    }
-    else if (cmd == "4:a") {
-        autoDistance = true;
-        Serial.println("Modo AUTO activado");
-    }
-    else if (cmd == "4:m") { 
-        autoDistance = false;
-        motor.write(manualTargetAngle);
-        servoAngle = manualTargetAngle;
-        Serial.println("Modo MANUAL activado - Angulo: " + String(manualTargetAngle));
-    }
-    else if (cmd.startsWith("5:")) {
-        int ang = constrain(cmd.substring(2).toInt(), 0, 180);
-        manualTargetAngle = ang;
-        Serial.println("Nuevo angulo recibido: " + String(ang));
-        if (!autoDistance) {
-            motor.write(ang);
-            servoAngle = ang;
-        }
-    }
-}
-
-void validateAndHandle(const String &data) {
-    int asterisco = data.indexOf('*');
-    if (asterisco == -1) {
-        Serial.println("✗ CMD sin checksum: " + data);
-        corruptedCommands++;
-        return;
-    }
-    
-    String msg = data.substring(0, asterisco);
-    String chkRecv = data.substring(asterisco + 1);
-    String chkCalc = calcChecksum(msg);
-    
-    if (chkRecv == chkCalc) {
-        handleCommand(msg);
-    } else {
-        Serial.println("✗ CMD corrupto: " + data);
-        Serial.println("  Esperado: " + chkCalc + " | Recibido: " + chkRecv);
-        corruptedCommands++;
-    }
-}
-
-void updateTempMedia(float nuevaTemp) {
-  tempHistory[tempIndex] = nuevaTemp;
-  tempIndex = (tempIndex + 1) % TEMP_HISTORY;
-  if (tempIndex == 0) tempFilled = true;
-
-  int n = tempFilled ? TEMP_HISTORY : tempIndex;
-  float suma = 0;
-  for (int i = 0; i < n; i++) suma += tempHistory[i];
-  tempMedia = suma / n;
-
-  medias[mediaIndex] = tempMedia;
-  mediaIndex = (mediaIndex + 1) % 3;
-
-  bool alerta = true;
-  for (int i = 0; i < 3; i++) {
-    if (medias[i] <= 100.0) alerta = false;
+    Serial.print("Position: (X: ");
+    Serial.print(x);
+    Serial.print(" m, Y: ");
+    Serial.print(y);
+    Serial.print(" m, Z: ");
+    Serial.print(z);
+    Serial.println(" m)");
   }
-  if (alerta) {
-    sendPacketWithChecksum(8, "e");
-    Serial.println("¡ALERTA! Temperatura media >100°C");
-  }
-}
-
-// === SIMULACIÓN ORBITAL ===
-void simulate_orbit() {
-    unsigned long currentMillis = millis();
-    double time = ((currentMillis - orbitStartTime) / 1000.0) * TIME_COMPRESSION;
-    double angle = 2.0 * PI * (time / real_orbital_period);
-    
-    long x = (long)(r * cos(angle));
-    long y = (long)(r * sin(angle));
-    long z = 0;
-    
-    String payload = String((long)time) + ":" + String(x) + ":" + String(y) + ":" + String(z);
-    sendPacketWithChecksum(9, payload);
 }
 
 void setup() {
-    Serial.begin(9600);
-    satSerial.begin(9600);
-    pinMode(LEDPIN, OUTPUT);
-    digitalWrite(LEDPIN, LOW);
-    pinMode(trigPin, OUTPUT);
-    pinMode(echoPin, INPUT);
-    dht.begin();
-    motor.attach(servoPin);
-    motor.write(servoAngle);
-    lastTokenTime = millis();
-    
-    r = R_EARTH + ALTITUDE;
-    real_orbital_period = 2.0 * PI * sqrt(pow(r, 3) / (G * M));
-    orbitStartTime = millis();
-    
-    Serial.println("=================================");
-    Serial.println("  SATELITE v2.0 - LORA");
-    Serial.println("=================================");
-    Serial.println("Esperando token del Ground Station...");
-    Serial.println();
+  Serial.begin(9600);
+  mySerial.begin(9600);
+  Serial.println("COMM LISTO orbital");
+  pinMode(errpin, OUTPUT);
+  lastTokenSent = millis();
+  lastStatsReport = millis();
+  lastReceived = millis();
+  
+  // Enviar token inicial al SAT
+  delay(2000);
+  sendWithChecksum("67:1");
+  satHasToken = true;
 }
 
 void loop() {
-    unsigned long now = millis();
-    
-    // Servo automático
-    if (autoDistance && now - lastServoMove >= SERVO_MOVE_INTERVAL) {
-        lastServoMove = now;
-        servoAngle += servoDir * SERVO_STEP;
-        if (servoAngle >= 180) { servoAngle = 180; servoDir = -1; }
-        else if (servoAngle <= 0) { servoAngle = 0; servoDir = 1; }
-        motor.write(servoAngle);
+  unsigned long now = millis();
+
+  // Gestión de turnos
+  if (!satHasToken && now - lastTokenSent > TOKEN_CYCLE) {
+    sendWithChecksum("67:1");
+    satHasToken = true;
+    lastTokenSent = now;
+  }
+
+  // Estadísticas cada 10s
+  if (now - lastStatsReport > STATS_INTERVAL) {
+    if (corruptedFromSat > 0) {
+      Serial.println("99:" + String(corruptedFromSat));
+      corruptedFromSat = 0;
     }
+    lastStatsReport = now;
+  }
 
-    // Leer comandos con validación
-    if (satSerial.available()) {
-        String cmd = satSerial.readStringUntil('\n');
-        cmd.trim();
-        if (cmd.length() > 0) {
-            Serial.println("GS-> " + cmd); // AÑADIDO: log de recepción
-            validateAndHandle(cmd);
-        }
+  // Comandos de usuario con checksum
+  if (Serial.available()) {
+    String command = Serial.readStringUntil('\n');
+    command.trim();
+    if (command.length() > 0) {
+      if (command.indexOf('*') != -1) {
+        mySerial.println(command);
+        Serial.println("GS-> " + command);
+      } else {
+        sendWithChecksum(command);
+      }
     }
+  }
 
-    // Recuperación por timeout
-    if (!canTransmit && now - lastTokenTime > TOKEN_TIMEOUT) {
-        canTransmit = true;
-        Serial.println("⚠ TIMEOUT: Recuperando transmisión automáticamente");
-    }
+  // Ángulo del potenciómetro con checksum
+  if (now - last > delay_ang) {
+    int potval = analogRead(potent);
+    int angle = map(potval, 0, 1023, 180, 0);
+    sendWithChecksum("5:" + String(angle));
+    last = now;
+  }
+  
+  // Recepción con validación
+  if (mySerial.available()) {
+    String data = mySerial.readStringUntil('\n');
+    data.trim();
 
-    // Envío de datos
-    if (now - lastSend >= sendPeriod) {
-        if (sending && canTransmit) {
-            Serial.println("--- INICIANDO CICLO DE TRANSMISION ---");
-            
-            // === ENVÍO CON DELAYS ENTRE PAQUETES ===
-            
-            // 1. Sensores temp/hum
-            float h = dht.readHumidity();
-            float t = dht.readTemperature();
-            if (isnan(h) || isnan(t)) {
-                sendPacketWithChecksum(4, "e:1");
-                Serial.println("✗ Error leyendo DHT11");
-            } else {
-                sendPacketWithChecksum(1, String((int)(h * 100)) + ":" + String((int)(t * 100)));
-                Serial.println("Temp: " + String(t) + "°C | Hum: " + String(h) + "%");
-                updateTempMedia(t);
-            }
-            delay(INTER_PACKET_DELAY);
+    if (data.length() > 0) {
+      String cleanMsg;
+      
+      if (!validateMessage(data, cleanMsg)) {
+        Serial.println("SAT-> CORRUPTO: " + data);
+        corruptedFromSat++;
+        digitalWrite(errpin, HIGH);
+        delay(100);
+        digitalWrite(errpin, LOW);
+        return;
+      }
+      
+      Serial.println("SAT-> OK: " + cleanMsg);
+      
+      int sepr = cleanMsg.indexOf(':');
+      if (sepr > 0) {
+        int id = cleanMsg.substring(0, sepr).toInt();
+        String valor = cleanMsg.substring(sepr + 1);
 
-            // 2. Temperatura media
-            sendPacketWithChecksum(7, String((int)(tempMedia * 100)));
-            Serial.println("Temp media: " + String(tempMedia) + "°C");
-            delay(INTER_PACKET_DELAY);
-
-            // 3. Distancia
-            int dist = pingSensor();
-            if (dist == 0) {
-                sendPacketWithChecksum(5, "e:1");
-                Serial.println("✗ Error sensor ultrasonidos");
-            } else {
-                sendPacketWithChecksum(2, String(dist));
-                Serial.println("Distancia: " + String(dist) + " mm");
-            }
-            delay(INTER_PACKET_DELAY);
-
-            // 4. Ángulo servo
-            if (!motor.attached()) {
-                sendPacketWithChecksum(6, "e:1");
-                Serial.println("✗ Error servo desconectado");
-            } else {
-                sendPacketWithChecksum(6, String(servoAngle));
-                Serial.println("Angulo servo: " + String(servoAngle) + "°");
-            }
-            delay(INTER_PACKET_DELAY);
-
-            // 5. Posición orbital
-            simulate_orbit();
-            Serial.println("Posicion orbital enviada");
-            delay(INTER_PACKET_DELAY);
-
-            // 6. Libera turno
-            sendPacketWithChecksum(67, "0");
-            canTransmit = false;
-            Serial.println("--- Token liberado. Fin transmision ---");
-            Serial.println();
-            
-        } else if (sending && !canTransmit) {
-            // AÑADIDO: Debug cuando quiere enviar pero no puede
-            if ((now / 1000) % 5 == 0) { // Cada 5 segundos
-                Serial.println("⏳ Esperando token para transmitir...");
-            }
+        if (id == 67 && valor == "0") {
+          satHasToken = false;
+          lastTokenSent = now;
+          return;
         }
 
-        // LED indicador
-        digitalWrite(LEDPIN, HIGH);
-        ledTimer = now;
-        ledState = true;
-        lastSend = now;
-    }
+        // Protocolo normal + orbital
+        if (id == 1) prot1(valor);
+        else if (id == 2) prot2(valor);
+        else if (id == 3) prot3(valor);
+        else if (id == 4) prot4(valor);
+        else if (id == 5) prot5(valor);
+        else if (id == 6) prot6(valor);
+        else if (id == 7) prot7(valor);
+        else if (id == 8) prot8(valor);
+        else if (id == 9) prot9(valor);
 
-    if (ledState && now - ledTimer > 80) {
-        digitalWrite(LEDPIN, LOW);
-        ledState = false;
+        if (valor.startsWith("e")) {
+          digitalWrite(errpin, HIGH);
+          delay(500);
+          digitalWrite(errpin, LOW);
+        }
+      }
+      lastReceived = now;
     }
+  }
+
+  // Timeout
+  if (now - lastReceived > timeout) {
+    Serial.println("TIMEOUT: sin datos del satélite");
+    digitalWrite(errpin, HIGH);
+    delay(100);
+    digitalWrite(errpin, LOW);
+    delay(50);
+    lastReceived = now;
+  }
 }
