@@ -1,0 +1,14 @@
+2025-11-28 17:01:57|observacion|Me voy a por una birra
+2025-11-28 17:03:00|comando|4:m
+2025-11-28 17:03:01|comando|4:m
+2025-11-28 17:03:01|comando|4:m
+2025-11-28 17:04:25|observacion|hello bro
+2025-11-28 17:04:47|observacion|yoyoyo Mr. White someone is at the door
+2025-11-28 17:04:53|observacion|Who is it?
+2025-11-28 17:04:56|observacion|yoyoyo Mr. White someone is at the door
+2025-11-28 17:05:04|observacion|Jesse we have dementia
+2025-11-28 17:05:06|observacion|yoyoyo Mr. White someone is at the door
+2025-11-28 17:05:11|observacion|Who is it?
+2025-11-28 17:05:13|observacion|yoyoyo Mr. White someone is at the door
+2025-11-28 17:05:19|observacion|Jesse we have dementia
+2025-11-28 17:05:57|alarma|Error sensor distancia
