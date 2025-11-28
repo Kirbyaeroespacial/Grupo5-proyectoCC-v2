@@ -395,4 +395,3 @@ def on_close():
 
 window.protocol("WM_DELETE_WINDOW", on_close)
 window.mainloop()
-
