@@ -129,8 +129,10 @@ void handleCommand(const String &cmd) {
   } else if (cmd.startsWith("5:")) {
     int ang = constrain(cmd.substring(2).toInt(), 0, 180);
     manualTargetAngle = ang;
+    motor.write(servoAngle);
     if (!autoDistance)
       servoAngle = manualTargetAngle;
+      motor.write(servoAngle);
   }
 }
 
