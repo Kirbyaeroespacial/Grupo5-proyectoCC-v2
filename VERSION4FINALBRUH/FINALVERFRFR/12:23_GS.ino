@@ -1,9 +1,10 @@
-// Código GROUND STATION CORREGIDO - CHECKSUM FIJO + TIMEOUT LED BLINK + POTENTIÓMETRO RÁPIDO
+// GS_CORREGIDO_TIMEOUT_POT_AND_BINARY_PARSE.ino
+// Ground Station corregido - checksum ASCII, parseo binario, pot rápido, timeout led blink
 #include <SoftwareSerial.h>
 SoftwareSerial mySerial(10, 11); // RX, TX
 
-int errpin = 2;
-char potent = A0;
+const uint8_t errpin = 2;
+const uint8_t potent = A0;            // pin del potenciómetro
 unsigned long lastReceived = 0;
 unsigned long last = 0;
 const unsigned long timeout = 20000;        // 20 s -> tiempo sin recepción para activar blink
@@ -54,7 +55,7 @@ bool validateMessage(const String &data, String &cleanMsg) {
   return (chkRecv == chkCalc);
 }
 
-// Protocolo de aplicación
+// Protocolo de aplicación (stubs - ajustar según lo que quieras mostrar)
 void prot1(String valor) { Serial.println("1:" + valor); }
 void prot2(String valor) { Serial.println("2:" + valor); }
 void prot3(String valor) { Serial.println("3:" + valor); }
@@ -65,24 +66,30 @@ void prot7(String valor) { Serial.println("7:" + valor); }
 void prot8(String valor) { Serial.println("8:e"); }
 
 void prot9(String valor) {
-  // Formato: tiempo:X:Y:Z
-  int sep1 = valor.indexOf(':');
-  int sep2 = valor.indexOf(':', sep1 + 1);
-  int sep3 = valor.indexOf(':', sep2 + 1);
-
-  if (sep1 > 0 && sep2 > 0 && sep3 > 0) {
-    String x = valor.substring(sep1 + 1, sep2);
-    String y = valor.substring(sep2 + 1, sep3);
-    String z = valor.substring(sep3 + 1);
-
-    Serial.print("Position: (X: ");
-    Serial.print(x);
-    Serial.print(" m, Y: ");
-    Serial.print(y);
-    Serial.print(" m, Z: ");
-    Serial.print(z);
-    Serial.println(" m)");
+  // Formato esperado: time:X:Y:Z (o similar según el sat)
+  // Si el SAT envía "time:123:456:789", lo mostramos en formato Position...
+  // Esta función puede adaptarse si el formato real es distinto.
+  int sepr = valor.indexOf(':');
+  if (sepr <= 0) {
+    Serial.println("prot9: formato inesperado");
+    return;
   }
+  // Buscar siguientes separadores
+  int s1 = valor.indexOf(':', sepr + 1);
+  int s2 = valor.indexOf(':', s1 + 1);
+  if (s1 <= 0 || s2 <= 0) {
+    Serial.println("prot9: separadores insuficientes");
+    return;
+  }
+  String sx = valor.substring(s1 + 1, s2);
+  String sy = valor.substring(s2 + 1);
+  Serial.print("Position: (X: ");
+  Serial.print(sx);
+  Serial.print(" m, Y: ");
+  Serial.print(sy);
+  Serial.print(" m, Z: ");
+  Serial.print("0");
+  Serial.println(" m)");
 }
 
 void prot10(String valor) {
@@ -120,6 +127,8 @@ int32_t bytesToInt32(uint8_t b0, uint8_t b1, uint8_t b2, uint8_t b3) {
 }
 
 // Leer y procesar telemetría binaria con DEBUG
+// Retorna true si procesó (válido o corrupto) y por tanto el caller puede evitar
+// interpretar más bytes como ASCII para el mismo paquete.
 bool readBinaryTelemetry() {
   // Verificar si hay suficientes bytes
   if (mySerial.available() < (int)TELEMETRY_FRAME_SIZE) {
@@ -139,7 +148,7 @@ bool readBinaryTelemetry() {
   size_t bytesRead = 0;
   unsigned long startTime = millis();
 
-  // Leer byte por byte con timeout
+  // Leer byte por byte con timeout corto
   while (bytesRead < TELEMETRY_FRAME_SIZE && (millis() - startTime) < 200) {
     if (mySerial.available()) {
       raw[bytesRead] = mySerial.read();
@@ -153,7 +162,7 @@ bool readBinaryTelemetry() {
     Serial.print("/");
     Serial.println(TELEMETRY_FRAME_SIZE);
     corruptedFromSat++;
-    return true;
+    return true; // consideramos que intentamos procesar (evita doble lectura como ASCII)
   }
 
   // Validar header
@@ -169,7 +178,6 @@ bool readBinaryTelemetry() {
     cs ^= raw[i];
   }
 
-  // DEBUG: Imprimir info del frame recibido
   Serial.print("RX: H=");
   Serial.print(frame.header, HEX);
   Serial.print(" Hum=");
@@ -181,24 +189,24 @@ bool readBinaryTelemetry() {
   Serial.print(" CS_recv=");
   Serial.print(frame.checksum, HEX);
 
-  // Validar checksum
   if (cs != frame.checksum) {
     Serial.println(" -> CORRUPTO!");
     corruptedFromSat++;
+    // También podríamos encender errpin brevemente para aviso de corrupción
     digitalWrite(errpin, HIGH);
-    delay(100);
+    delay(50);
     digitalWrite(errpin, LOW);
     return true;
   }
 
   Serial.println(" -> OK!");
 
-  // Frame válido - extraer coordenadas
+  // Extraer coordenadas
   int32_t x = bytesToInt32(frame.x_b0, frame.x_b1, frame.x_b2, frame.x_b3);
   int32_t y = bytesToInt32(frame.y_b0, frame.y_b1, frame.y_b2, frame.y_b3);
   int32_t z = bytesToInt32(frame.z_b0, frame.z_b1, frame.z_b2, frame.z_b3);
 
-  // Procesar y mostrar - (mantenemos la lógica original del PDF)
+  // Mostrar de forma legible para que el Python lo parsee (igual que en el PDF)
   Serial.print("Position: (X: ");
   Serial.print(x);
   Serial.print(" m, Y: ");
@@ -207,7 +215,11 @@ bool readBinaryTelemetry() {
   Serial.print(z);
   Serial.println(" m)");
 
-  // --- MODIFICADO --- Actualizar timestamp de última recepción válida
+  // Mostrar panel y otros campos como ASCII (para compatibilidad con el parser Python)
+  Serial.print("Panel:");
+  Serial.println(frame.panelState);
+
+  // --- MODIFICADO --- actualizar timestamp de última recepción válida
   lastReceived = millis();
 
   return true;
@@ -226,21 +238,23 @@ void setup() {
 void loop() {
   unsigned long now = millis();
 
-  // Estadísticas cada 10s
+  // Estadísticas cada STATS_INTERVAL
   if (now - lastStatsReport > STATS_INTERVAL) {
     if (corruptedFromSat > 0) {
+      // Informar al sat (o al logger) cuantos corruptos hemos contado
       Serial.println("99:" + String(corruptedFromSat));
       corruptedFromSat = 0;
     }
     lastStatsReport = now;
   }
 
-  // Comandos de usuario (desde USB->Serial)
+  // Comandos desde USB->Serial (usuario via Monitor serie)
   if (Serial.available()) {
     String command = Serial.readStringUntil('\n');
     command.trim();
     if (command.length() > 0) {
       if (command.indexOf('*') != -1) {
+        // Si ya trae checksum, lo reenvío tal cual
         mySerial.println(command);
         Serial.println("GS-> " + command);
       } else {
@@ -249,77 +263,73 @@ void loop() {
     }
   }
 
-  // Ángulo del potenciómetro - envío periódico (ahora rápido)
+  // Envío del potenciómetro periódicamente (ahora rápido)
   if (now - last > delay_ang) {
     int potval = analogRead(potent);
     int angle = map(potval, 0, 1023, 180, 0);
-    sendWithChecksum("5:" + String(angle));
+    sendWithChecksum("5:" + String(angle)); // envía 5:angle*CHK al sat
     last = now;
   }
 
   // ===== RECEPCIÓN DE DATOS =====
+  bool processedBinary = false;
+
   if (mySerial.available()) {
-    // Intentar leer telemetría binaria primero
     int p = mySerial.peek();
 
     if (p == 0xAA) {
-      // Posible frame binario - esperar a que llegue completo
-      delay(50); // Dar tiempo a que lleguen todos los bytes
-
-      bool processed = readBinaryTelemetry();
-      if (processed) {
-        // --- MODIFICADO --- Si readBinaryTelemetry procesó y fue válida, lastReceived ya fue actualizado dentro.
-        continue; // Ya procesado
-      }
-      // Si no se procesó, continuar al flujo ASCII
+      // Posible frame binario - dar un pequeño margen y procesar
+      delay(50); // dar tiempo a que lleguen todos los bytes
+      processedBinary = readBinaryTelemetry(); // true si procesó intento binario (válido o corrupto)
     }
 
-    // Flujo ASCII (comandos y tokens)
-    String data = mySerial.readStringUntil('\n');
-    data.trim();
+    // Si no procesamos binario, intentamos leer ASCII (comandos con checksum, tokens, etc.)
+    if (!processedBinary) {
+      // Comprobamos de nuevo disponibilidad (puede que haya bytes ASCII)
+      if (mySerial.available()) {
+        String data = mySerial.readStringUntil('\n');
+        data.trim();
+        if (data.length() > 0) {
+          String cleanMsg;
+          if (!validateMessage(data, cleanMsg)) {
+            Serial.println("SAT-> CORRUPTO: " + data);
+            corruptedFromSat++;
+            // breve indicación de error
+            digitalWrite(errpin, HIGH);
+            delay(50);
+            digitalWrite(errpin, LOW);
+            // NOTA: no actualizamos lastReceived aquí porque el mensaje fue corrupto
+          } else {
+            Serial.println("SAT-> OK: " + cleanMsg);
+            // --- MODIFICADO --- Actualizamos última recepción válida
+            lastReceived = millis();
 
-    if (data.length() > 0) {
-      String cleanMsg;
+            int sepr = cleanMsg.indexOf(':');
+            if (sepr > 0) {
+              int id = cleanMsg.substring(0, sepr).toInt();
+              String valor = cleanMsg.substring(sepr + 1);
 
-      if (!validateMessage(data, cleanMsg)) {
-        Serial.println("SAT-> CORRUPTO: " + data);
-        corruptedFromSat++;
-        digitalWrite(errpin, HIGH);
-        delay(100);
-        digitalWrite(errpin, LOW);
-        // NOTA: no actualizamos lastReceived aquí porque el mensaje fue corrupto
-        continue;
-      }
-
-      Serial.println("SAT-> OK: " + cleanMsg);
-
-      // --- MODIFICADO --- Actualizar última recepción válida
-      lastReceived = millis();
-
-      int sepr = cleanMsg.indexOf(':');
-
-      if (sepr > 0) {
-        int id = cleanMsg.substring(0, sepr).toInt();
-        String valor = cleanMsg.substring(sepr + 1);
-
-        // Token
-        if (id == 67 && valor == "0") {
-          satHasToken = false;
-          lastTokenSent = now;
-          continue;
+              // Manejar token
+              if (id == 67 && valor == "0") {
+                satHasToken = false;
+                lastTokenSent = now;
+                // no hacemos más
+              } else {
+                // Protocolos
+                if (id == 1) prot1(valor);
+                else if (id == 2) prot2(valor);
+                else if (id == 3) prot3(valor);
+                else if (id == 4) prot4(valor);
+                else if (id == 5) prot5(valor);
+                else if (id == 6) prot6(valor);
+                else if (id == 7) prot7(valor);
+                else if (id == 8) prot8(valor);
+                else if (id == 9) prot9(valor);
+                else if (id == 10) prot10(valor);
+              }
+            }
+          }
         }
-
-        // Protocolos
-        if (id == 1) prot1(valor);
-        else if (id == 2) prot2(valor);
-        else if (id == 3) prot3(valor);
-        else if (id == 4) prot4(valor);
-        else if (id == 5) prot5(valor);
-        else if (id == 6) prot6(valor);
-        else if (id == 7) prot7(valor);
-        else if (id == 8) prot8(valor);
-        else if (id == 9) prot9(valor);
-        else if (id == 10) prot10(valor);
       }
     }
   }
@@ -338,4 +348,7 @@ void loop() {
       digitalWrite(errpin, LOW);
     }
   }
+
+  // Pequeña pausa no bloqueante para evitar hogging de CPU
+  delay(1);
 }
