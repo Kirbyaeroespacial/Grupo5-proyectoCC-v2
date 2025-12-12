@@ -1,0 +1,431 @@
+# GUÍA VISUAL RÁPIDA - Sistema Corregido
+
+## 🎯 CAMBIOS PRINCIPALES
+
+### 1️⃣ MODO MANUAL DEL POTENCIÓMETRO
+
+```
+ANTES (NO FUNCIONABA):
+┌─────────┐         ┌──────────┐         ┌──────────┐
+│   GUI   │──4:m──→│    GS    │         │   SAT    │
+└─────────┘         └──────────┘         └──────────┘
+                         ❌                    ❌
+                    (ignoraba              (no movía
+                    potenciómetro)          servo)
+
+AHORA (FUNCIONA):
+┌─────────┐         ┌──────────┐         ┌──────────┐
+│   GUI   │──4:m──→│    GS    │──5:90──→│   SAT    │
+└─────────┘         └────┬─────┘         └────┬─────┘
+                         │                     │
+                    ✅ Lee pot              ✅ Mueve
+                    cada 500ms              servo
+```
+
+### 2️⃣ ALARMA DE TIMEOUT
+
+```
+COMUNICACIÓN NORMAL:
+┌──────────┐ telemetría ┌──────────┐
+│   SAT    │────────────→│    GS    │
+└──────────┘  cada 2.5s  └──────────┘
+ LED 12: 💡              LED 13: ⚫
+ (parpadea)              (apagado)
+
+SIN COMUNICACIÓN >20-30 SEGUNDOS:
+┌──────────┐    ❌      ┌──────────┐
+│   SAT    │────────────│    GS    │
+└──────────┘            └──────────┘
+ LED 13: 🔴💡🔴          LED 13: 🔴💡🔴
+ (parpadea alarma)      (parpadea alarma)
+```
+
+---
+
+## 📋 CHECKLIST DE INSTALACIÓN
+
+### Hardware:
+- [ ] LED en pin 13 del Satélite (alarma timeout)
+- [ ] LED en pin 13 del Ground Station (alarma timeout)
+- [ ] Potenciómetro en A0 del Ground Station
+- [ ] Servo en pin 5 del Satélite
+- [ ] Módulos LoRa conectados (pines 10, 11)
+
+### Software:
+- [ ] Subir `SATELITE_CORREGIDO_FINAL.ino` al Arduino del satélite
+- [ ] Subir `GROUND_STATION_CORREGIDO_FINAL.ino` al Arduino de GS
+- [ ] Verificar baudrate 9600 en ambos
+- [ ] Probar comunicación serial
+
+---
+
+## 🔄 FLUJO COMPLETO - MODO MANUAL
+
+```
+PASO 1: ACTIVAR MODO MANUAL
+┌──────────────────────────────────────────────────┐
+│  Usuario presiona botón "Manual" en GUI Python   │
+└────────────────────┬─────────────────────────────┘
+                     │
+                     ▼
+            ┌──────────────────┐
+            │  GUI envía: 4:m  │
+            └────────┬──────────┘
+                     │
+                     ▼ (por USB serial)
+         ┌─────────────────────────┐
+         │   Ground Station        │
+         │  - Recibe "4:m"         │
+         │  - manualMode = true    │
+         │  - Imprime "Modo MANUAL"│
+         └───────────┬─────────────┘
+                     │
+                     ▼ (por LoRa)
+              ┌────────────────────────┐
+              │      Satélite          │
+              │  - Recibe "4:m"        │
+              │  - autoDistance=false  │
+              │  - Servo para de barrer│
+              └────────────────────────┘
+
+PASO 2: CONTROL CON POTENCIÓMETRO
+┌──────────────────────────────────┐
+│  Usuario gira potenciómetro ↻    │
+└───────────┬──────────────────────┘
+            │
+            ▼ (lectura A0)
+     ┌──────────────────────┐
+     │   Ground Station     │
+     │  - Lee pot: 512      │
+     │  - Mapea a: 90°      │
+     │  - Envia: 5:90       │
+     └──────────┬───────────┘
+                │
+                ▼ (por LoRa con checksum)
+         ┌──────────────────────┐
+         │      Satélite        │
+         │  - Recibe "5:90*3A"  │
+         │  - Valida checksum   │
+         │  - motor.write(90)   │
+         │  - Servo → 90°       │
+         └──────────────────────┘
+
+PASO 3: VOLVER A AUTO
+┌──────────────────────────────────┐
+│  Usuario presiona botón "Auto"   │
+└────────────┬─────────────────────┘
+             │
+             ▼
+       ┌───────────────┐
+       │  GUI: 4:a     │
+       └───────┬───────┘
+               │
+               ▼
+    ┌────────────────────────┐
+    │    Ground Station      │
+    │  manualMode = false    │
+    └───────────┬────────────┘
+                │
+                ▼
+         ┌────────────────────┐
+         │     Satélite       │
+         │  autoDistance=true │
+         │  Servo reanuda     │
+         │  barrido 0°-180°   │
+         └────────────────────┘
+```
+
+---
+
+## ⏱️ TIMEOUT - SECUENCIA DE EVENTOS
+
+```
+TIMELINE DE COMUNICACIÓN NORMAL:
+0s    2.5s   5s    7.5s   10s   12.5s  15s   17.5s  20s
+│─────│─────│─────│─────│─────│─────│─────│─────│
+SAT:  📡     📡     📡     📡     📡     📡     📡     📡
+GS:   ✅     ✅     ✅     ✅     ✅     ✅     ✅     ✅
+LED:  ⚫     ⚫     ⚫     ⚫     ⚫     ⚫     ⚫     ⚫
+
+
+TIMELINE CON PÉRDIDA DE COMUNICACIÓN:
+0s    5s    10s   15s   20s   25s   30s   35s   40s
+│─────│─────│─────│─────│─────│─────│─────│─────│
+SAT:  📡     📡    ❌    ❌    ❌    ❌    ❌    ❌
+      │     │                              ↓
+GS:   ✅     ✅                          🚨 ALARMA
+LED:  ⚫     ⚫     ⚫     ⚫    🔴💡   🔴💡  🔴💡  🔴💡
+                              ↑
+                         (20s sin datos)
+
+
+Ground Station: ALARMA a los 20 segundos
+Satélite:       ALARMA a los 30 segundos
+Ambos:          LED pin 13 parpadea cada 300-500ms
+```
+
+---
+
+## 🔧 COMANDOS DE PRUEBA RÁPIDA
+
+### Desde Monitor Serial del Ground Station:
+
+```bash
+# Test 1: Cambiar a modo manual
+4:m
+# Esperar ver: "GS-> 4:m*XX" y "Modo MANUAL desde comando"
+
+# Test 2: Mover servo manualmente
+5:90
+# Esperar ver: "GS-> 5:90*XX"
+
+# Test 3: Volver a modo auto
+4:a
+# Esperar ver: "GS-> 4:a*XX" y "Modo AUTO desde comando"
+
+# Test 4: Cambiar periodo de telemetría
+1:5000
+# Telemetría cada 5 segundos
+
+# Test 5: Iniciar transmisión
+3:i
+# Comenzar envío de datos
+```
+
+---
+
+## 🎛️ VALORES DEL POTENCIÓMETRO
+
+```
+Potenciómetro:  Lectura ADC:  Ángulo Servo:
+┌────────────┐  ┌──────────┐  ┌───────────┐
+│     ↺      │  │   1023   │  │    0°     │ ←─ Giro completo izq
+│     │      │  │          │  │           │
+│     │      │  │    512   │  │   90°     │ ←─ Centro
+│     │      │  │          │  │           │
+│     ↻      │  │     0    │  │   180°    │ ←─ Giro completo der
+└────────────┘  └──────────┘  └───────────┘
+
+Mapeo: analogRead(A0) → map(0-1023, 180-0)
+Histéresis: ±2° para evitar jitter
+Frecuencia: Cada 500ms (solo en modo manual)
+```
+
+---
+
+## 🚦 INDICADORES LED
+
+```
+┌─────────────────────────────────────────────────────┐
+│              GROUND STATION                         │
+├─────────────┬───────────────────────────────────────┤
+│  PIN 2      │  Error de checksum                    │
+│  (errpin)   │  🔴 Encendido 100ms cuando hay error  │
+├─────────────┼───────────────────────────────────────┤
+│  PIN 13     │  Alarma de timeout (NUEVO)            │
+│  (alarmpin) │  🔴💡🔴💡 Parpadea si no hay datos >20s│
+└─────────────┴───────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────┐
+│                  SATÉLITE                           │
+├─────────────┬───────────────────────────────────────┤
+│  PIN 12     │  Transmisión activa                   │
+│  (LEDPIN)   │  💡 Parpadea 80ms al enviar telemetría│
+├─────────────┼───────────────────────────────────────┤
+│  PIN 13     │  Alarma de timeout (NUEVO)            │
+│(ALARM_LED)  │  🔴💡🔴💡 Parpadea si no hay cmds >30s │
+└─────────────┴───────────────────────────────────────┘
+```
+
+---
+
+## 📊 PROTOCOLO DE MENSAJES
+
+### COMANDOS (ASCII con checksum):
+
+```
+┌──────────┬─────────────────────────────────────────┐
+│  ID:VAL  │              DESCRIPCIÓN                │
+├──────────┼─────────────────────────────────────────┤
+│  1:5000  │  Periodo telemetría (ms)                │
+│  2:90    │  Ángulo manual (0-180°)                 │
+│  3:i     │  Iniciar transmisión                    │
+│  3:p     │  Pausar transmisión                     │
+│  4:a     │  Modo AUTO (servo barrido)              │
+│  4:m     │  Modo MANUAL (potenciómetro)            │
+│  5:90    │  Set ángulo manual (GS→SAT)             │
+│  67:1    │  Token: permiso para transmitir         │
+│  67:0    │  Token: liberar (fin transmisión)       │
+└──────────┴─────────────────────────────────────────┘
+
+Formato completo: "ID:VALOR*CHECKSUM\n"
+Ejemplo: "5:90*3A\n"
+```
+
+### TELEMETRÍA (Binaria):
+
+```
+┌───────┬──────┬─────────────────────────────────┐
+│ Byte  │ Tipo │         Contenido               │
+├───────┼──────┼─────────────────────────────────┤
+│   0   │ 0xAA │  Header (siempre 0xAA)          │
+│  1-2  │ u16  │  Humedad × 100                  │
+│  3-4  │ i16  │  Temperatura × 100              │
+│  5-6  │ u16  │  Temp media × 100               │
+│  7-8  │ u16  │  Distancia (cm)                 │
+│   9   │  u8  │  Ángulo servo (0-180)           │
+│ 10-11 │ u16  │  Tiempo simulado (s)            │
+│ 12-15 │ i32  │  Coordenada X (little-endian)   │
+│ 16-19 │ i32  │  Coordenada Y (little-endian)   │
+│ 20-23 │ i32  │  Coordenada Z (little-endian)   │
+│  24   │  u8  │  Estado panel (0/40/60/100)     │
+│  25   │  u8  │  Checksum (XOR de bytes 0-24)   │
+└───────┴──────┴─────────────────────────────────┘
+Total: 26 bytes
+```
+
+---
+
+## ✅ TESTS DE VALIDACIÓN
+
+### Test A: Modo Manual Completo
+```
+1. Monitor Serial Ground Station abierto
+2. Girar potenciómetro completamente a la izquierda
+3. Enviar: 4:m
+4. Verificar: "Modo MANUAL desde comando"
+5. Verificar: "GS-> 5:180*XX" (ángulo actual)
+6. Girar potenciómetro lentamente a la derecha
+7. Verificar: Comandos "5:XXX*YY" cada 500ms
+8. Monitor Serial Satélite: "Servo manual a: XXX"
+9. Observar: Servo sigue el potenciómetro
+10. Enviar: 4:a
+11. Verificar: Servo reanuda barrido automático
+```
+
+### Test B: Alarma Timeout
+```
+1. Sistema funcionando normalmente
+2. Ambos LEDs pin 13 apagados
+3. Desconectar cable TX del LoRa (cualquiera)
+4. Cronometrar 20 segundos (GS) o 30s (SAT)
+5. Verificar: LED 13 comienza a parpadear
+6. Verificar Serial: "¡ALARMA! Timeout..."
+7. Reconectar cable
+8. Verificar: LED se apaga automáticamente
+9. Verificar Serial: "Comunicación restaurada"
+```
+
+### Test C: Integración Completa
+```
+1. Sistema en modo AUTO
+2. Telemetría fluyendo normalmente
+3. LED 12 parpadea cada 2.5s
+4. LED 13 apagado (sin alarma)
+5. Cambiar a modo MANUAL: 4:m
+6. Girar potenciómetro: servo responde
+7. Desconectar LoRa por >20s
+8. Alarma se activa (LED 13 parpadea)
+9. Reconectar LoRa
+10. Alarma se desactiva
+11. Modo manual sigue funcionando
+12. Cambiar a AUTO: 4:a
+13. Todo vuelve a la normalidad
+```
+
+---
+
+## 🐛 DEBUGGING RÁPIDO
+
+### Problema: "Potenciómetro no mueve servo"
+
+```
+DIAGNÓSTICO:
+┌─────────────────────────────────────────┐
+│ ¿Se envió comando 4:m?                  │
+│  NO → Enviar desde GUI o Serial         │
+│  SÍ → ↓                                 │
+├─────────────────────────────────────────┤
+│ ¿Aparece "Modo MANUAL" en Serial?      │
+│  NO → Verificar comunicación LoRa       │
+│  SÍ → ↓                                 │
+├─────────────────────────────────────────┤
+│ ¿Se envían comandos "5:XXX"?            │
+│  NO → Verificar potenciómetro en A0     │
+│  SÍ → ↓                                 │
+├─────────────────────────────────────────┤
+│ ¿Llegan al satélite?                    │
+│  NO → Verificar LoRa, checksum          │
+│  SÍ → ↓                                 │
+├─────────────────────────────────────────┤
+│ ¿Servo conectado y alimentado?          │
+│  NO → Verificar pin 5 y alimentación    │
+│  SÍ → Verificar código handleCommand()  │
+└─────────────────────────────────────────┘
+```
+
+### Problema: "Alarma no se activa"
+
+```
+DIAGNÓSTICO:
+┌─────────────────────────────────────────┐
+│ ¿LED conectado en pin 13?              │
+│  NO → Conectar LED + resistencia 220Ω   │
+│  SÍ → ↓                                 │
+├─────────────────────────────────────────┤
+│ ¿Pasaron >20s (GS) o >30s (SAT)?       │
+│  NO → Esperar más tiempo                │
+│  SÍ → ↓                                 │
+├─────────────────────────────────────────┤
+│ ¿Aparece mensaje en Serial?            │
+│  NO → Verificar función updateTimeout() │
+│  SÍ → Verificar pinMode(13, OUTPUT)     │
+└─────────────────────────────────────────┘
+```
+
+---
+
+## 📞 CONTACTO Y SOPORTE
+
+Para más información sobre el sistema:
+- Revisar CAMBIOS_IMPLEMENTADOS.md (documentación completa)
+- Revisar comentarios en el código fuente
+- Verificar conexiones según diagramas de hardware
+
+```
+┌────────────────────────────────────────────┐
+│  VERSIÓN: FINAL_v1.0                       │
+│  FECHA: Diciembre 2024                     │
+│  CARACTERÍSTICAS:                          │
+│   ✅ Modo manual potenciómetro            │
+│   ✅ Alarma timeout comunicación          │
+│   ✅ Telemetría binaria                   │
+│   ✅ Panel solar automático               │
+│   ✅ Sistema de tokens                    │
+│   ✅ Checksum en todos los mensajes       │
+└────────────────────────────────────────────┘
+```
+
+---
+
+## 🎓 RESUMEN PARA PRINCIPIANTES
+
+**¿Qué hace el sistema?**
+- Simula un satélite que envía datos de sensores
+- Ground Station recibe y muestra los datos
+- Puedes controlar el servo de dos formas:
+  - AUTO: El servo se mueve solo (0° a 180° y viceversa)
+  - MANUAL: Tú controlas con el potenciómetro
+
+**¿Qué significa la alarma?**
+- Si el LED 13 parpadea = no hay comunicación
+- Sistema sigue funcionando pero no hay datos
+- Al reconectar, alarma se apaga sola
+
+**¿Cómo uso el modo manual?**
+1. Presiona botón "Manual" en la GUI
+2. Gira el potenciómetro
+3. El servo se mueve al ángulo que indicas
+4. Para volver a automático: botón "Auto"
+
+¡Eso es todo! 🚀
