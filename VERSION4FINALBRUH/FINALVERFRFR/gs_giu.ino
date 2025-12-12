@@ -1,99 +1,112 @@
-//Código SATELITE CORREGIDO FINAL - Con modo manual potenciómetro + timeout restaurados
-#include <DHT.h>
+//Código GROUND STATION CORREGIDO FINAL - Con potenciómetro manual + timeout restaurados
 #include <SoftwareSerial.h>
-#include <Servo.h>
-#include <Stepper.h>
+SoftwareSerial mySerial(10, 11); // RX, TX
 
-#define DHTPIN 2
-#define DHTTYPE DHT11
+int errpin = 2;
+int alarmpin = 13; // LED de alarma para timeout
+char potent = A0;
+unsigned long lastReceived = 0;
+unsigned long last = 0;
+const unsigned long timeout = 20000; // 20 segundos
+const unsigned long delay_ang = 500; // 500ms para lectura más frecuente del potenciómetro
 
-DHT dht(DHTPIN, DHTTYPE);
-SoftwareSerial satSerial(10, 11); // RX=10, TX=11
+// Variables para gestión de modo manual
+bool manualMode = false; // Indica si estamos en modo manual
+int lastPotAngle = -1; // Último ángulo enviado para evitar duplicados
 
-const uint8_t LEDPIN = 12;
-const uint8_t ALARM_LED_PIN = 13; // LED de alarma para timeout
-bool sending = false;
-unsigned long lastSend = 0;
-unsigned long sendPeriod = 20000UL;
+// Gestión de turnos
+bool satHasToken = false;
+unsigned long lastTokenSent = 0;
+const unsigned long TOKEN_CYCLE = 2500;
 
-const uint8_t servoPin = 5;
-Servo motor;
+// Checksum: contadores
+int corruptedFromSat = 0;
+unsigned long lastStatsReport = 0;
+const unsigned long STATS_INTERVAL = 10000;
 
-const uint8_t trigPin = 3;
-const uint8_t echoPin = 4;
-const unsigned long PULSE_TIMEOUT_US = 30000UL;
-
-bool autoDistance = true;
-int servoAngle = 90;
-int servoDir = 1;
-int manualTargetAngle = 90;
-
-const int SERVO_STEP = 2;
-const unsigned long SERVO_MOVE_INTERVAL = 40;
-unsigned long lastServoMove = 0;
-
-bool ledState = false;
-unsigned long ledTimer = 0;
-
-bool canTransmit = true;
-unsigned long lastTokenTime = 0;
-const unsigned long TOKEN_TIMEOUT = 6000;
-
-// Variables para timeout de comunicación
-unsigned long lastCommandReceived = 0;
-const unsigned long COMM_TIMEOUT = 30000; // 30 segundos sin comunicación = alarma
-bool commTimeout = false;
+// Variables para alarma de timeout
+bool timeoutAlarm = false;
 bool alarmState = false;
 unsigned long lastAlarmToggle = 0;
-const unsigned long ALARM_BLINK_INTERVAL = 500; // Parpadeo de 500ms
+const unsigned long ALARM_BLINK_INTERVAL = 300; // Parpadeo más rápido
 
-int corruptedCommands = 0;
+// === CHECKSUM (ASCII) ===
+String calcChecksum(const String &msg) {
+  uint8_t xorSum = 0;
+  for (unsigned int i = 0; i < msg.length(); i++) {
+    xorSum ^= msg[i];
+  }
+  String hex = String(xorSum, HEX);
+  hex.toUpperCase();
+  if (hex.length() == 1) hex = "0" + hex;
+  return hex;
+}
 
-#define TEMP_HISTORY 10
-float tempHistory[TEMP_HISTORY];
-int tempIndex = 0;
-bool tempFilled = false;
-float tempMedia = 0.0;
-float medias[3] = {0, 0, 0};
-int mediaIndex = 0;
+void sendWithChecksum(const String &msg) {
+  String chk = calcChecksum(msg);
+  String fullMsg = msg + "*" + chk;
+  mySerial.println(fullMsg);
+  Serial.println("GS-> " + fullMsg);
+}
 
-const double G = 6.67430e-11;
-const double M = 5.97219e24;
-const double R_EARTH = 6371000;
-const double ALTITUDE = 4000000;
-const double TIME_COMPRESSION = 260.0;
-const double EARTH_ROTATION_RATE = 7.2921159e-5;
-double real_orbital_period;
-double r;
-unsigned long orbitStartTime = 0;
+bool validateMessage(const String &data, String &cleanMsg) {
+  int asterisco = data.indexOf('*');
+  if (asterisco == -1) return false;
+  
+  cleanMsg = data.substring(0, asterisco);
+  String chkRecv = data.substring(asterisco + 1);
+  String chkCalc = calcChecksum(cleanMsg);
+  
+  return (chkRecv == chkCalc);
+}
 
-// ===== PANEL SOLAR CON STEPPER (NO-BLOQUEANTE) =====
-const uint8_t PHOTORESISTOR_PIN = A1;
-const int STEPS_PER_REV = 2048;
-Stepper stepperMotor(STEPS_PER_REV, 6, 8, 7, 9);
+// Protocolo de aplicación
+void prot1(String valor) { Serial.println("1:" + valor); }
+void prot2(String valor) { Serial.println("2:" + valor); }
+void prot3(String valor) { Serial.println("3:" + valor); }
+void prot4(String valor) { 
+  // Detectar cambio de modo
+  if (valor == "a") {
+    manualMode = false;
+    Serial.println("4:a");
+    Serial.println("Modo AUTO activado desde GUI");
+  } else if (valor == "m") {
+    manualMode = true;
+    Serial.println("4:m");
+    Serial.println("Modo MANUAL activado desde GUI");
+  }
+}
+void prot5(String valor) { Serial.println("5:" + valor); }
+void prot6(String valor) { Serial.println("6:" + valor); }
+void prot7(String valor) { Serial.println("7:" + valor); }
+void prot8(String valor) { Serial.println("8:e"); }
 
-int currentPanelState = 0;
-int targetPanelState = 0;
-bool panelStateChanged = false;
+void prot9(String valor) {
+  int sep1 = valor.indexOf(':');
+  int sep2 = valor.indexOf(':', sep1 + 1);
+  int sep3 = valor.indexOf(':', sep2 + 1);
+  
+  if (sep1 > 0 && sep2 > 0 && sep3 > 0) {
+    String x = valor.substring(sep1 + 1, sep2);
+    String y = valor.substring(sep2 + 1, sep3);
+    String z = valor.substring(sep3 + 1);
+    
+    Serial.print("Position: (X: ");
+    Serial.print(x);
+    Serial.print(" m, Y: ");
+    Serial.print(y);
+    Serial.print(" m, Z: ");
+    Serial.print(z);
+    Serial.println(" m)");
+  }
+}
 
-const int TOTAL_REVOLUTIONS = 120;
-const long TOTAL_DEPLOYMENT_STEPS = TOTAL_REVOLUTIONS * STEPS_PER_REV;
+void prot10(String valor) {
+  Serial.print("Panel:");
+  Serial.println(valor);
+}
 
-unsigned long lastLightCheck = 0;
-const unsigned long LIGHT_CHECK_INTERVAL = 3000;
-
-const int LIGHT_MIN = 400;
-const int LIGHT_MAX = 900;
-const int LIGHT_RANGE = LIGHT_MAX - LIGHT_MIN;
-
-bool stepperMoving = false;
-long stepperRemaining = 0;
-int stepperDirection = 1;
-unsigned long lastStepperMove = 0;
-const unsigned long STEPPER_INTERVAL = 2;
-const int STEPS_PER_ITERATION = 8;
-
-// ===== ESTRUCTURA TELEMETRÍA BINARIA =====
+// ===== ESTRUCTURA TELEMETRÍA BINARIA (IDÉNTICA AL SAT) =====
 #pragma pack(push, 1)
 struct TelemetryFrame {
   uint8_t header;
@@ -112,553 +125,270 @@ struct TelemetryFrame {
 #pragma pack(pop)
 const size_t TELEMETRY_FRAME_SIZE = sizeof(TelemetryFrame);
 
-// === ASCII checksum ===
-String calcChecksum(const String &msg) {
-  uint8_t xorSum = 0;
-  for (unsigned int i = 0; i < msg.length(); i++) {
-    xorSum ^= msg[i];
+int32_t bytesToInt32(uint8_t b0, uint8_t b1, uint8_t b2, uint8_t b3) {
+  int32_t val = 0;
+  val |= ((int32_t)b0);
+  val |= ((int32_t)b1 << 8);
+  val |= ((int32_t)b2 << 16);
+  val |= ((int32_t)b3 << 24);
+  return val;
+}
+
+bool readBinaryTelemetry() {
+  if (mySerial.available() < (int)TELEMETRY_FRAME_SIZE) {
+    return false;
   }
-  String hex = String(xorSum, HEX);
-  hex.toUpperCase();
-  if (hex.length() == 1)
-    hex = "0" + hex;
-  return hex;
-}
 
-void sendPacketWithChecksum(uint8_t type, const String &payload) {
-  String msg = String(type) + ":" + payload;
-  String chk = calcChecksum(msg);
-  String fullMsg = msg + "*" + chk;
-  satSerial.println(fullMsg);
-  Serial.println("-> " + fullMsg);
-}
+  int p = mySerial.peek();
+  if (p != 0xAA) {
+    return false;
+  }
 
-void sendTelemetryBinary(
-  uint16_t hum100,
-  int16_t temp100,
-  uint16_t avg100,
-  uint16_t dist,
-  uint8_t servo,
-  uint16_t time_s,
-  int32_t x,
-  int32_t y,
-  int32_t z,
-  uint8_t panel
-) {
   TelemetryFrame frame;
-  frame.header = 0xAA;
-  frame.humidity = hum100;
-  frame.temperature = temp100;
-  frame.tempAvg = avg100;
-  frame.distance = dist;
-  frame.servoAngle = servo;
-  frame.time_s = time_s;
+  uint8_t *raw = (uint8_t*)&frame;
   
-  frame.x_b0 = (x) & 0xFF;
-  frame.x_b1 = (x >> 8) & 0xFF;
-  frame.x_b2 = (x >> 16) & 0xFF;
-  frame.x_b3 = (x >> 24) & 0xFF;
+  size_t bytesRead = 0;
+  unsigned long startTime = millis();
   
-  frame.y_b0 = (y) & 0xFF;
-  frame.y_b1 = (y >> 8) & 0xFF;
-  frame.y_b2 = (y >> 16) & 0xFF;
-  frame.y_b3 = (y >> 24) & 0xFF;
-  
-  frame.z_b0 = (z) & 0xFF;
-  frame.z_b1 = (z >> 8) & 0xFF;
-  frame.z_b2 = (z >> 16) & 0xFF;
-  frame.z_b3 = (z >> 24) & 0xFF;
-  
-  frame.panelState = panel;
-
-  uint8_t *ptr = (uint8_t*)&frame;
-  uint8_t cs = 0;
-  
-  for (size_t i = 0; i < TELEMETRY_FRAME_SIZE - 1; i++) {
-    cs ^= ptr[i];
+  while (bytesRead < TELEMETRY_FRAME_SIZE && (millis() - startTime) < 200) {
+    if (mySerial.available()) {
+      raw[bytesRead] = mySerial.read();
+      bytesRead++;
+    }
   }
   
-  frame.checksum = cs;
+  if (bytesRead != TELEMETRY_FRAME_SIZE) {
+    Serial.print("ERROR: frame incompleto, leidos ");
+    Serial.print(bytesRead);
+    Serial.print("/");
+    Serial.println(TELEMETRY_FRAME_SIZE);
+    corruptedFromSat++;
+    return true;
+  }
 
-  Serial.print("TX: H=");
+  if (frame.header != 0xAA) {
+    Serial.println("ERROR: header inválido");
+    corruptedFromSat++;
+    return true;
+  }
+
+  uint8_t cs = 0;
+  for (size_t i = 0; i < TELEMETRY_FRAME_SIZE - 1; i++) {
+    cs ^= raw[i];
+  }
+
+  Serial.print("RX: H=");
   Serial.print(frame.header, HEX);
   Serial.print(" Hum=");
   Serial.print(frame.humidity);
   Serial.print(" T=");
   Serial.print(frame.temperature);
-  Serial.print(" CS=");
+  Serial.print(" CS_calc=");
+  Serial.print(cs, HEX);
+  Serial.print(" CS_recv=");
   Serial.print(frame.checksum, HEX);
-  Serial.print(" Size=");
-  Serial.println(TELEMETRY_FRAME_SIZE);
 
-  satSerial.write((uint8_t*)&frame, TELEMETRY_FRAME_SIZE);
-}
-
-int pingSensor() {
-  digitalWrite(trigPin, LOW);
-  delayMicroseconds(4);
-  digitalWrite(trigPin, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(trigPin, LOW);
-
-  unsigned long dur = pulseIn(echoPin, HIGH, PULSE_TIMEOUT_US);
-  if (dur == 0)
-    return 0;
-  return (int)(dur * 0.343 / 2.0);
-}
-
-void handleCommand(const String &cmd) {
-  Serial.println(cmd);
-  
-  // Actualizar timestamp de última comunicación
-  lastCommandReceived = millis();
-  commTimeout = false;
-
-  if (cmd == "67:1") {
-    canTransmit = true;
-    lastTokenTime = millis();
-    return;
-  } else if (cmd == "67:0") {
-    canTransmit = false;
-    return;
+  if (cs != frame.checksum) {
+    Serial.println(" -> CORRUPTO!");
+    corruptedFromSat++;
+    digitalWrite(errpin, HIGH);
+    delay(100);
+    digitalWrite(errpin, LOW);
+    return true;
   }
 
-  if (cmd.startsWith("1:")) {
-    unsigned long newPeriod = (unsigned long)cmd.substring(2).toInt();
-    if (newPeriod < 200) newPeriod = 200;
-    sendPeriod = newPeriod;
-    Serial.print("DEBUG: nuevo sendPeriod: "); Serial.println(sendPeriod);
-  } else if (cmd.startsWith("2:")) {
-    manualTargetAngle = constrain(cmd.substring(2).toInt(), 0, 180);
-    if (!autoDistance) {
-      motor.write(manualTargetAngle);
-      servoAngle = manualTargetAngle;
-    }
-  } else if (cmd == "3:i" || cmd == "3:r") {
-    sending = true;
-  } else if (cmd == "3:p") {
-    sending = false;
-  } else if (cmd == "4:a") {
-    autoDistance = true;
-    Serial.println("Modo AUTO activado");
-  } else if (cmd == "4:m") {
-    autoDistance = false;
-    motor.write(manualTargetAngle);
-    servoAngle = manualTargetAngle;
-    Serial.println("Modo MANUAL activado");
-  } else if (cmd.startsWith("5:")) {
-    int ang = constrain(cmd.substring(2).toInt(), 0, 180);
-    manualTargetAngle = ang;
-    if (!autoDistance) {
-      motor.write(manualTargetAngle);
-      servoAngle = manualTargetAngle;
-      Serial.print("Servo manual a: ");
-      Serial.println(manualTargetAngle);
-    }
-  }
-}
+  Serial.println(" -> OK!");
 
-void validateAndHandle(const String &data) {
-  int asterisco = data.indexOf('*');
-  if (asterisco == -1) {
-    Serial.println("CMD sin checksum, descartado");
-    corruptedCommands++;
-    return;
-  }
+  int32_t x = bytesToInt32(frame.x_b0, frame.x_b1, frame.x_b2, frame.x_b3);
+  int32_t y = bytesToInt32(frame.y_b0, frame.y_b1, frame.y_b2, frame.y_b3);
+  int32_t z = bytesToInt32(frame.z_b0, frame.z_b1, frame.z_b2, frame.z_b3);
 
-  String msg = data.substring(0, asterisco);
-  String chkRecv = data.substring(asterisco + 1);
-  String chkCalc = calcChecksum(msg);
+  String humTemp = String(frame.humidity) + ":" + String(frame.temperature);
+  prot1(humTemp);
+  prot7(String(frame.tempAvg));
+  prot2(String(frame.distance));
+  prot6(String(frame.servoAngle));
 
-  if (chkRecv == chkCalc) {
-    handleCommand(msg);
-  } else {
-    Serial.println("CMD corrupto, descartado");
-    corruptedCommands++;
-  }
-}
+  String orbStr = String(frame.time_s) + ":" + String(x) + ":" + String(y) + ":" + String(z);
+  prot9(orbStr);
+  prot10(String(frame.panelState));
 
-void updateTempMedia(float nuevaTemp) {
-  tempHistory[tempIndex] = nuevaTemp;
-  tempIndex = (tempIndex + 1) % TEMP_HISTORY;
-  if (tempIndex == 0)
-    tempFilled = true;
-
-  int n = tempFilled ? TEMP_HISTORY : tempIndex;
-  float suma = 0;
-  for (int i = 0; i < n; i++)
-    suma += tempHistory[i];
-
-  tempMedia = suma / n;
-  medias[mediaIndex] = tempMedia;
-  mediaIndex = (mediaIndex + 1) % 3;
-
-  bool alerta = true;
-  for (int i = 0; i < 3; i++) {
-    if (medias[i] <= 100.0)
-      alerta = false;
-  }
-
-  if (alerta)
-    sendPacketWithChecksum(8, "e");
-}
-
-double eccentricity = 0.2;
-double inclination = 51.6;
-const double ecef = 1;
-
-void compute_orbit(uint16_t &time_s_out, int32_t &x_out, int32_t &y_out, int32_t &z_out) {
-    unsigned long currentMillis = millis();
-    double time = (currentMillis / 1000.0) * TIME_COMPRESSION;
-    double M_anomaly = 2.0 * PI * (time / real_orbital_period);
-    
-    double E = M_anomaly;
-    for (int i = 0; i < 10; i++) {
-        E = E - (E - eccentricity * sin(E) - M_anomaly) / (1.0 - eccentricity * cos(E));
-    }
-    
-    double true_anomaly = 2.0 * atan2(
-        sqrt(1.0 + eccentricity) * sin(E / 2.0),
-        sqrt(1.0 - eccentricity) * cos(E / 2.0)
-    );
-    
-    double r_orbit = r * (1.0 - eccentricity * eccentricity) / (1.0 + eccentricity * cos(true_anomaly));
-    
-    double x_orbital = r_orbit * cos(true_anomaly);
-    double y_orbital = r_orbit * sin(true_anomaly);
-    double z_orbital = 0.0;
-    
-    double inclination_rad = inclination * PI / 180.0;
-    double y_inclined = y_orbital * cos(inclination_rad) - z_orbital * sin(inclination_rad);
-    double z_inclined = y_orbital * sin(inclination_rad) + z_orbital * cos(inclination_rad);
-    
-    double x = x_orbital;
-    double y = y_inclined;
-    double z = z_inclined;
-    
-    if (ecef) {
-        double theta = EARTH_ROTATION_RATE * time;
-        double x_ecef = x * cos(theta) - y * sin(theta);
-        double y_ecef = x * sin(theta) + y * cos(theta);
-        x = x_ecef;
-        y = y_ecef;
-    }
-    
-    x_out = (int32_t)x;
-    y_out = (int32_t)y;
-    z_out = (int32_t)z;
-    time_s_out = (uint16_t)((uint32_t)time & 0xFFFF);
-}
-
-void checkLightAndDeploy() {
-  unsigned long now = millis();
+  lastReceived = millis();
   
-  if (now - lastLightCheck < LIGHT_CHECK_INTERVAL) {
-    return;
-  }
-  
-  lastLightCheck = now;
-  
-  int lightLevel = analogRead(PHOTORESISTOR_PIN);
-  Serial.print("Luz: ");
-  Serial.print(lightLevel);
-  
-  int oldTarget = targetPanelState;
-  
-  if (lightLevel <= LIGHT_MIN) {
-    targetPanelState = 100;
-    Serial.println(" -> Panel 100% (luz baja)");
-  } 
-  else if (lightLevel >= LIGHT_MAX) {
-    targetPanelState = 0;
-    Serial.println(" -> Panel 0% (luz alta)");
-  } 
-  else {
-    int mappedValue = map(lightLevel, LIGHT_MIN, LIGHT_MAX, 100, 0);
-    targetPanelState = constrain(mappedValue, 0, 100);
-    Serial.print(" -> Panel ");
-    Serial.print(targetPanelState);
-    Serial.println("%");
-  }
-  
-  if (targetPanelState != currentPanelState && !stepperMoving) {
-    movePanelToTarget();
-  } else if (stepperMoving) {
-    Serial.println("(Stepper ocupado, esperando...)");
-  }
-}
-
-void movePanelToTarget() {
-  if (stepperMoving) {
-    Serial.println("Stepper ya en movimiento, ignorando comando");
-    return;
-  }
-  
-  Serial.print("Iniciando movimiento panel: ");
-  Serial.print(currentPanelState);
-  Serial.print("% -> ");
-  Serial.print(targetPanelState);
-  Serial.println("%");
-  
-  long currentSteps = ((long)currentPanelState * TOTAL_DEPLOYMENT_STEPS) / 100;
-  long targetSteps = ((long)targetPanelState * TOTAL_DEPLOYMENT_STEPS) / 100;
-  long stepsToMove = targetSteps - currentSteps;
-  
-  if (stepsToMove == 0) {
-    Serial.println("Sin movimiento necesario");
-    return;
-  }
-  
-  stepperMotor.setSpeed(6);
-  
-  Serial.print("Pasos totales a mover: ");
-  Serial.println(stepsToMove);
-  
-  stepperRemaining = abs(stepsToMove);
-  stepperDirection = (stepsToMove > 0) ? 1 : -1;
-  stepperMoving = true;
-  lastStepperMove = millis();
-}
-
-void updateStepper() {
-  if (!stepperMoving) {
-    return;
-  }
-  
-  unsigned long now = millis();
-  
-  if (now - lastStepperMove >= STEPPER_INTERVAL) {
-    lastStepperMove = now;
-    
-    if (stepperRemaining > 0) {
-      long stepsThisIteration = min((long)STEPS_PER_ITERATION, stepperRemaining);
-      stepperMotor.step(stepperDirection * stepsThisIteration);
-      stepperRemaining -= stepsThisIteration;
-      
-      static long lastReported = 0;
-      long stepsCompleted = abs(((long)targetPanelState * TOTAL_DEPLOYMENT_STEPS) / 100 - 
-                                ((long)currentPanelState * TOTAL_DEPLOYMENT_STEPS) / 100) - stepperRemaining;
-      if (stepsCompleted / 2048 > lastReported) {
-        lastReported = stepsCompleted / 2048;
-        Serial.print("Stepper: ");
-        Serial.print(lastReported);
-        Serial.print(" rev completadas, restan ");
-        Serial.print(stepperRemaining);
-        Serial.println(" pasos");
-      }
-    }
-    
-    if (stepperRemaining == 0) {
-      stepperMoving = false;
-      currentPanelState = targetPanelState;
-      Serial.println("Panel movido OK - No bloqueante");
-      panelStateChanged = true;
-    }
-  }
+  return true;
 }
 
 // Gestión de alarma de timeout
-void updateCommTimeout() {
+void updateTimeoutAlarm() {
   unsigned long now = millis();
   
-  // Verificar si hay timeout de comunicación
-  if (now - lastCommandReceived > COMM_TIMEOUT) {
-    if (!commTimeout) {
-      commTimeout = true;
-      Serial.println("¡ALARMA! Timeout de comunicación");
+  if (now - lastReceived > timeout) {
+    if (!timeoutAlarm) {
+      timeoutAlarm = true;
+      Serial.println("¡ALARMA! TIMEOUT: sin datos del satélite");
     }
     
     // Parpadear LED de alarma
     if (now - lastAlarmToggle > ALARM_BLINK_INTERVAL) {
       alarmState = !alarmState;
-      digitalWrite(ALARM_LED_PIN, alarmState ? HIGH : LOW);
+      digitalWrite(alarmpin, alarmState ? HIGH : LOW);
       lastAlarmToggle = now;
     }
   } else {
-    // Comunicación OK - apagar alarma
-    if (commTimeout) {
-      commTimeout = false;
+    // Comunicación OK
+    if (timeoutAlarm) {
+      timeoutAlarm = false;
       Serial.println("Comunicación restaurada");
     }
-    digitalWrite(ALARM_LED_PIN, LOW);
+    digitalWrite(alarmpin, LOW);
     alarmState = false;
   }
 }
 
 void setup() {
   Serial.begin(9600);
-  satSerial.begin(9600);
-
-  pinMode(LEDPIN, OUTPUT);
-  digitalWrite(LEDPIN, LOW);
+  mySerial.begin(9600);
   
-  pinMode(ALARM_LED_PIN, OUTPUT);
-  digitalWrite(ALARM_LED_PIN, LOW);
-
-  pinMode(trigPin, OUTPUT);
-  pinMode(echoPin, INPUT);
-
-  dht.begin();
-
-  motor.attach(servoPin);
-  motor.write(servoAngle);
-
-  lastTokenTime = millis();
-  lastCommandReceived = millis(); // Inicializar timestamp
-
-  r = R_EARTH + ALTITUDE;
-  real_orbital_period = 2.0 * PI * sqrt(pow(r, 3) / (G * M));
-  orbitStartTime = millis();
+  pinMode(errpin, OUTPUT);
+  pinMode(alarmpin, OUTPUT);
+  digitalWrite(alarmpin, LOW);
   
-  stepperMotor.setSpeed(6);
-  pinMode(PHOTORESISTOR_PIN, INPUT);
-
-  Serial.print("Tamaño frame: ");
+  Serial.print("Tamaño frame esperado: ");
   Serial.println(TELEMETRY_FRAME_SIZE);
-  Serial.print("Total revoluciones panel: ");
-  Serial.println(TOTAL_REVOLUTIONS);
-  Serial.print("Total pasos panel: ");
-  Serial.println(TOTAL_DEPLOYMENT_STEPS);
-  Serial.println("SAT listo (binario + Stepper + Timeout restaurado)");
+  Serial.println("GS LISTO (protocolo binario + modo manual potenciómetro + timeout)");
+  
+  lastTokenSent = millis();
+  lastStatsReport = millis();
+  lastReceived = millis();
 }
 
 void loop() {
   unsigned long now = millis();
 
-  // IMPORTANTE: Actualizar stepper de forma no-bloqueante
-  updateStepper();
-  
-  // Actualizar alarma de timeout de comunicación
-  updateCommTimeout();
+  // Actualizar alarma de timeout
+  updateTimeoutAlarm();
 
-  // Revisar luz y ajustar panel
-  checkLightAndDeploy();
+  // Gestión de turnos
+  if (!satHasToken && now - lastTokenSent > TOKEN_CYCLE) {
+    sendWithChecksum("67:1");
+    satHasToken = true;
+    lastTokenSent = now;
+  }
 
-  // Servo en modo auto
-  if (autoDistance && now - lastServoMove >= SERVO_MOVE_INTERVAL) {
-    lastServoMove = now;
-    servoAngle += servoDir * SERVO_STEP;
-    if (servoAngle >= 180) {
-      servoAngle = 180;
-      servoDir = -1;
-    } else if (servoAngle <= 0) {
-      servoAngle = 0;
-      servoDir = 1;
+  // Estadísticas cada 10s
+  if (now - lastStatsReport > STATS_INTERVAL) {
+    if (corruptedFromSat > 0) {
+      Serial.println("99:" + String(corruptedFromSat));
+      corruptedFromSat = 0;
     }
-    motor.write(servoAngle);
-  }
-  
-  // Recepción de comandos
-  if (satSerial.available()) {
-    String cmd = satSerial.readStringUntil('\n');
-    cmd.trim();
-    if (cmd.length())
-      validateAndHandle(cmd);
+    lastStatsReport = now;
   }
 
-  // Timeout de token
-  if (!canTransmit && now - lastTokenTime > TOKEN_TIMEOUT) {
-    canTransmit = true;
-    Serial.println("Timeout: recuperando transmisión");
-  }
-
-  // Ciclo de transmisión principal
-  if (now - lastSend >= sendPeriod) {
-    lastSend = now;
-
-    if (sending && canTransmit) {
-      float h = dht.readHumidity();
-      float t = dht.readTemperature();
-      bool temp_ok = !(isnan(h) || isnan(t));
-      
-      if (temp_ok) {
-        updateTempMedia(t);
+  // Comandos de usuario desde Serial (Python GUI)
+  if (Serial.available()) {
+    String command = Serial.readStringUntil('\n');
+    command.trim();
+    if (command.length() > 0) {
+      // Detectar comandos de cambio de modo
+      if (command == "4:a") {
+        manualMode = false;
+        Serial.println("Modo AUTO desde comando");
+      } else if (command == "4:m") {
+        manualMode = true;
+        Serial.println("Modo MANUAL desde comando");
       }
       
-      if (!temp_ok) {
-        sendPacketWithChecksum(4, "e:1");
+      if (command.indexOf('*') != -1) {
+        mySerial.println(command);
+        Serial.println("GS-> " + command);
+      } else {
+        sendWithChecksum(command);
       }
-
-      int dist = pingSensor();
-      bool dist_ok = (dist != 0);
-
-      uint16_t orb_time;
-      int32_t orb_x, orb_y, orb_z;
-      compute_orbit(orb_time, orb_x, orb_y, orb_z);
-
-      uint16_t hum100 = temp_ok ? (uint16_t)((int)(h * 100.0f)) : 0;
-      int16_t temp100 = temp_ok ? (int16_t)((int)(t * 100.0f)) : 0;
-      uint16_t avg100 = (uint16_t)((int)(tempMedia * 100.0f));
-      uint16_t dist_field = dist_ok ? (uint16_t)dist : 0;
-      uint8_t servo_field = (motor.attached()) ? (uint8_t)servoAngle : 0xFF;
-
-      sendTelemetryBinary(
-        hum100,
-        temp100,
-        avg100,
-        dist_field,
-        servo_field,
-        orb_time,
-        orb_x,
-        orb_y,
-        orb_z,
-        (uint8_t)currentPanelState
-      );
-
-      delay(100);
-
-      sendPacketWithChecksum(67, "0");
-      canTransmit = false;
-
-      panelStateChanged = false;
     }
-
-    digitalWrite(LEDPIN, HIGH);
-    ledTimer = now;
-    ledState = true;
   }
 
-  // Envío inmediato si cambió panel
-  if (panelStateChanged && canTransmit && sending && (now - lastSend > 1000)) {
-    lastSend = now;
-
-    float h = dht.readHumidity();
-    float t = dht.readTemperature();
-    if (!isnan(t)) updateTempMedia(t);
-    int dist = pingSensor();
-
-    uint16_t orb_time;
-    int32_t orb_x, orb_y, orb_z;
-    compute_orbit(orb_time, orb_x, orb_y, orb_z);
-
-    uint16_t hum100 = isnan(h) ? 0 : (uint16_t)((int)(h * 100.0f));
-    int16_t temp100 = isnan(t) ? 0 : (int16_t)((int)(t * 100.0f));
-    uint16_t avg100 = (uint16_t)((int)(tempMedia * 100.0f));
-    uint16_t dist_field = dist == 0 ? 0 : (uint16_t)dist;
-    uint8_t servo_field = (motor.attached()) ? (uint8_t)servoAngle : 0xFF;
-
-    sendTelemetryBinary(
-      hum100,
-      temp100,
-      avg100,
-      dist_field,
-      servo_field,
-      orb_time,
-      orb_x,
-      orb_y,
-      orb_z,
-      (uint8_t)currentPanelState
-    );
-
-    delay(100);
-    sendPacketWithChecksum(67, "0");
-    canTransmit = false;
-    panelStateChanged = false;
+  // Control del potenciómetro
+  if (now - last > delay_ang) {
+    int potval = analogRead(potent);
+    int angle = map(potval, 0, 1023, 180, 0);
+    
+    // Si estamos en modo manual, enviar el ángulo del potenciómetro
+    if (manualMode) {
+      // Solo enviar si el ángulo ha cambiado significativamente (±2 grados)
+      if (abs(angle - lastPotAngle) > 2) {
+        sendWithChecksum("5:" + String(angle));
+        lastPotAngle = angle;
+        Serial.print("Potenciómetro manual: ");
+        Serial.println(angle);
+      }
+    } else {
+      // En modo auto, el potenciómetro no hace nada
+      // (o podrías usarlo para otra función)
+      lastPotAngle = angle; // Actualizar para cuando cambie a manual
+    }
+    
+    last = now;
   }
+  
+  // ===== RECEPCIÓN DE DATOS =====
+  if (mySerial.available()) {
+    int p = mySerial.peek();
+    
+    if (p == 0xAA) {
+      delay(50);
+      bool processed = readBinaryTelemetry();
+      if (processed) {
+        return;
+      }
+    }
+    
+    // Flujo ASCII
+    String data = mySerial.readStringUntil('\n');
+    data.trim();
 
-  // LED
-  if (ledState && now - ledTimer > 80) {
-    digitalWrite(LEDPIN, LOW);
-    ledState = false;
+    if (data.length() > 0) {
+      String cleanMsg;
+      
+      if (!validateMessage(data, cleanMsg)) {
+        Serial.println("SAT-> CORRUPTO: " + data);
+        corruptedFromSat++;
+        digitalWrite(errpin, HIGH);
+        delay(100);
+        digitalWrite(errpin, LOW);
+        return;
+      }
+      
+      Serial.println("SAT-> OK: " + cleanMsg);
+      
+      int sepr = cleanMsg.indexOf(':');
+      if (sepr > 0) {
+        int id = cleanMsg.substring(0, sepr).toInt();
+        String valor = cleanMsg.substring(sepr + 1);
+
+        if (id == 67 && valor == "0") {
+          satHasToken = false;
+          lastTokenSent = now;
+          return;
+        }
+
+        if (id == 1) prot1(valor);
+        else if (id == 2) prot2(valor);
+        else if (id == 3) prot3(valor);
+        else if (id == 4) prot4(valor);
+        else if (id == 5) prot5(valor);
+        else if (id == 6) prot6(valor);
+        else if (id == 7) prot7(valor);
+        else if (id == 8) prot8(valor);
+        else if (id == 9) prot9(valor);
+        else if (id == 10) prot10(valor);
+
+        if (valor.startsWith("e")) {
+          digitalWrite(errpin, HIGH);
+          delay(500);
+          digitalWrite(errpin, LOW);
+        }
+      }
+      lastReceived = now;
+    }
   }
 }
