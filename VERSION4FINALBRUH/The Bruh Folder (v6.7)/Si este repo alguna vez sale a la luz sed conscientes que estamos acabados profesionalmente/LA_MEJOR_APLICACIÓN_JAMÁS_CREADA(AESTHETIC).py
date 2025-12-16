@@ -1,7 +1,3 @@
-# ================= INTERFAZ PYTHON CORREGIDA =================
-# ✅ Agregado control manual de ángulo
-# ✅ Compatible con satélite corregido
-
 import time
 import serial
 import threading
@@ -514,10 +510,10 @@ def abrir_ground_track():
         ax_gt_win.imshow(map_img, extent=[-180, 180, -90, 90], aspect='auto', alpha=0.6, zorder=0)
         print("✓ Mapa cargado: mapa.jpg")
     except FileNotFoundError:
-        print("⚠️ No se encontró mapa.jpg - usando fondo sin mapa")
+        print("No se encontró mapa.jpg - usando fondo sin mapa")
         print("   Coloca una imagen 'mapa.jpg' en la carpeta del script")
     except Exception as e:
-        print(f"⚠️ Error cargando mapa: {e}")
+        print(f"Error cargando mapa: {e}")
     
     ax_gt_win.set_xlim(-180, 180)
     ax_gt_win.set_ylim(-90, 90)
